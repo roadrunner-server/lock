@@ -310,22 +310,31 @@ func (l *locker) forceRelease(res string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if rr, ok := l.resources.LoadAndDelete(res); ok {
-		r := rr.(*resource)
-		if *r.lock.Load() != "" {
-			id := *r.lock.Load()
-			l.queue.Remove(id)
-			return true
+	if _, ok := l.resources.Load(res); !ok {
+		l.log.Debug("no such resource", zap.String("res", res))
+		return false
+	}
+
+	// here we know, that the associated with the resource value exists
+	rr, _ := l.resources.LoadAndDelete(res)
+	r := rr.(*resource)
+
+	if *r.lock.Load() != "" {
+		id := *r.lock.Load()
+		l.queue.Remove(id)
+		l.log.Debug("lock forcibly released", zap.String("lock ID", id))
+
+		return true
+	}
+
+	if r.rlocks.Len() > 0 {
+		ids := r.rlocks.RemoveAll()
+		for i := 0; i < len(ids); i++ {
+			l.queue.Remove(ids[i])
+			l.log.Debug("read lock forcibly released", zap.String("read lock ID", ids[i]))
 		}
 
-		if r.rlocks.Len() > 0 {
-			ids := r.rlocks.RemoveAll()
-			for i := 0; i < len(ids); i++ {
-				l.queue.Remove(ids[i])
-			}
-
-			return true
-		}
+		return true
 	}
 
 	return false
