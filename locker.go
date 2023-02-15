@@ -6,13 +6,13 @@ import (
 	"time"
 
 	"github.com/roadrunner-server/lock/v4/rlocks"
-	"github.com/roadrunner-server/lock/v4/timer"
+	pq "github.com/roadrunner-server/sdk/v4/priority_queue"
 	"go.uber.org/zap"
 )
 
 // timers: https://blogtitle.github.io/go-advanced-concurrency-patterns-part-2-timers/
 // resource
-type res struct {
+type resource struct {
 	// rlocks is the list of the read locks
 	rlocks *rlocks.RLocks
 	// lock is the exclusive lock
@@ -20,96 +20,146 @@ type res struct {
 }
 
 type locker struct {
-	log *zap.Logger
+	log    *zap.Logger
+	stopCh chan struct{}
 
-	mu   sync.Mutex
-	cond sync.Cond
+	// cas variable
+	// used in the CAS algorithm to check if we have mutex acquired
+	locked *int64
+	queue  *pq.BinHeap[item]
+	mu     sync.Mutex //
 
-	timers *timer.Timers
-	data   map[string]*res
+	resources sync.Map //map[string]*res
 }
 
 func NewLocker(log *zap.Logger) *locker {
-	return &locker{
+	l := &locker{
+		queue:  pq.NewBinHeap[item](1000),
 		log:    log,
-		data:   make(map[string]*res, 10),
-		timers: timer.New(),
-		cond: sync.Cond{
-			L: &sync.Mutex{},
-		},
+		locked: ptrTo(int64(0)),
+		stopCh: make(chan struct{}),
+	}
+
+	go func() {
+		l.wait()
+	}()
+
+	return l
+}
+
+func (l *locker) wait() {
+	ticker := time.NewTicker(time.Second)
+	for {
+		select {
+		case <-l.stopCh:
+			return
+		case <-ticker.C:
+			tn := time.Now().Unix()
+			tmp := l.queue.PeekPriority()
+			if tmp == -1 {
+				continue
+			}
+
+			// check for the expired TTL
+			if tn >= tmp {
+				l.log.Debug("lock: expired, executing callback")
+				// we have an item with the expired TTL, extract it and execute callback
+				i := l.queue.ExtractMin()
+				i.callback()
+			}
+		}
 	}
 }
 
-func (l *locker) lock(resource, id string, ttl, wait int) bool {
+func (l *locker) lock(res, id string, ttl int) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// only 1 goroutine might be passed here at the time
+
 	// if there is no lock for the provided resource -> create it
 	// assume that this is the first call to the lock with this resource and hash
-	if _, ok := l.data[resource]; !ok {
+	if _, ok := l.resources.Load(res); !ok {
 		l.log.Debug("no such resource, creating new",
 			zap.String("id", id),
 			zap.Int("ttl", ttl),
-			zap.Int("wait", wait),
 		)
-		r := &res{
+
+		r := &resource{
 			rlocks: rlocks.NewRLocks(),
 		}
 
-		l.data[resource] = r
-
+		// store the resource and lock
+		l.resources.Store(res, r)
 		r.lock.Store(ptrTo(id))
 
 		if ttl == 0 {
 			return true
 		}
 
-		l.timers.StoreAndWait(id, time.NewTimer(time.Second*time.Duration(ttl)), func() {
+		l.queue.Insert(newItem(res, id, ttl, func() {
 			// double-check the ID
 			if *r.lock.Load() != id {
+				l.log.Debug("inconsistent lock state",
+					zap.String("original ID", id),
+					zap.String("lock ID", *r.lock.Load()))
 				return
 			}
+
+			l.log.Debug("lock: ttl expired",
+				zap.String("id", id),
+				zap.Int("ttl", ttl),
+			)
 			// remove the lock
-			r.lock.Store(nil)
-			// send signal
-			l.cond.Signal()
-		})
+			r.lock.Store(ptrTo(""))
+		}))
 
 		return true
 	}
 
 	// here we know, that the associated with the resource value exists
-	r := l.data[resource]
+	rr, _ := l.resources.Load(res)
+	r := rr.(*resource)
 
 	// easy case, if we don't have any lock
-	if r.rlocks.Len() == 0 && r.lock.Load() == nil {
+	if r.rlocks.Len() == 0 && *r.lock.Load() == "" {
 		r.lock.Store(ptrTo(id))
 
 		if ttl == 0 {
 			return true
 		}
 
-		l.timers.StoreAndWait(id, time.NewTimer(time.Second*time.Duration(ttl)), func() {
+		l.queue.Insert(newItem(res, id, ttl, func() {
 			// double-check the ID
 			if *r.lock.Load() != id {
+				l.log.Debug("inconsistent lock state",
+					zap.String("original ID", id),
+					zap.String("lock ID", *r.lock.Load()))
 				return
 			}
+
+			l.log.Debug("lock: ttl expired",
+				zap.String("id", id),
+				zap.Int("ttl", ttl),
+			)
 			// remove the lock
-			r.lock.Store(nil)
-			// send signal
-			l.cond.Signal()
-		})
+			r.lock.Store(ptrTo(""))
+		}))
 
 		return true
 	}
 
 	// we want exclusive lock, but don't want to wait for it
-	if (r.rlocks.Len() > 1 || r.lock.Load() != nil) && wait == 0 {
+	if r.rlocks.Len() >= 1 || *r.lock.Load() != "" {
+		l.log.Debug("lock already obtained",
+			zap.String("id", id),
+			zap.Int("ttl", ttl),
+		)
 		// have a read locks
 		return false
 	}
 
 	// we need to check if that the holder of the rlock is we
-	if r.rlocks.Len() == 1 && r.lock.Load() == nil && wait == 0 {
+	if r.rlocks.Len() == 1 && *r.lock.Load() == "" {
 		// update the read-lock to write-lock
 		if r.rlocks.Remove(id) {
 			// store the updated lock
@@ -119,107 +169,48 @@ func (l *locker) lock(resource, id string, ttl, wait int) bool {
 				return true
 			}
 
-			l.timers.StoreAndWait(id, time.NewTimer(time.Second*time.Duration(ttl)), func() {
+			l.queue.Insert(newItem(res, id, ttl, func() {
 				// double-check the ID
 				if *r.lock.Load() != id {
+					l.log.Debug("inconsistent lock state",
+						zap.String("original ID", id),
+						zap.String("lock ID", *r.lock.Load()))
 					return
 				}
+
+				l.log.Debug("lock: ttl expired",
+					zap.String("id", id),
+					zap.Int("ttl", ttl),
+				)
 				// remove the lock
-				r.lock.Store(nil)
-				// send signal
-				l.cond.Signal()
-			})
+				r.lock.Store(ptrTo(""))
+			}))
 
 			return true
 		}
-
-		return false
-	}
-
-	// here is the case, where a lock(or readLock) acquired, and we want to wait for it
-	if (r.rlocks.Len() >= 1 || r.lock.Load() != nil) && wait != 0 {
-		tryMore := atomic.Bool{}
-		tryMore.Store(true)
-
-		stopTimerCh := make(chan struct{}, 1)
-
-		go func() {
-			waitT := time.NewTimer(time.Second * time.Duration(wait))
-			for {
-				select {
-				case <-stopTimerCh:
-					if !waitT.Stop() {
-						waitT.Reset(time.Nanosecond)
-						<-waitT.C
-					}
-					return
-				case <-waitT.C:
-					tryMore.Store(false)
-					l.cond.Signal()
-					return
-				}
-			}
-		}()
-
-		// if we have read-locks OR write locks
-		l.cond.L.Lock()
-		for r.rlocks.Len() > 0 || r.lock.Load() != nil {
-			// pass 1 waiting goroutine for the release method
-			l.cond.Wait()
-			if tryMore.Load() {
-				continue
-			}
-
-			l.cond.L.Unlock()
-			return false
-		}
-
-		// stop the wait timer
-		stopTimerCh <- struct{}{}
-
-		if r.rlocks.Len() > 0 || r.lock.Load() != nil {
-			panic("lock: mutual access which is protected by mutexes")
-		}
-
-		r.lock.Store(ptrTo(id))
-
-		if ttl == 0 {
-			l.cond.L.Unlock()
-			return true
-		}
-
-		l.timers.StoreAndWait(id, time.NewTimer(time.Second*time.Duration(ttl)), func() {
-			wl := r.lock.Load()
-			// double-check the ID
-			if *wl != id {
-				return
-			}
-			// remove the lock
-			r.lock.Store(nil)
-			// signal the lock that we update the condition
-			l.cond.Signal()
-		})
-
-		l.cond.L.Unlock()
-		return true
 	}
 
 	return false
 }
 
-func (l *locker) lockRead(resource, id string, ttl, wait int) bool {
+func (l *locker) lockRead(res, id string, ttl int) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	// if there is no lock for the provided resource -> create it
 	// assume that this is the first call to the lock with this resource and hash
-	if _, ok := l.data[resource]; !ok {
-		r := &res{
+	if _, ok := l.resources.Load(res); !ok {
+		l.log.Debug("no such resource, creating new",
+			zap.String("id", id),
+			zap.Int("ttl", ttl),
+		)
+		r := &resource{
 			rlocks: rlocks.NewRLocks(),
 		}
 
+		r.lock.Store(ptrTo(""))
 		r.rlocks.Append(id)
-		l.data[resource] = r
+		l.resources.Store(res, r)
 
 		if ttl == 0 {
 			return true
@@ -229,125 +220,73 @@ func (l *locker) lockRead(resource, id string, ttl, wait int) bool {
 			here we need to unlock the read lock, to do that, we're iterating over the all read locks and trying
 			to find and delete our ID
 		*/
-		l.timers.StoreAndWait(id, time.NewTimer(time.Second*time.Duration(ttl)), func() {
-			if r.rlocks.Remove(id) {
-				// signal the goroutine on the Wait (if waiting)
-				l.cond.Signal()
-			}
-		})
+		l.queue.Insert(newItem(res, id, ttl, func() {
+			l.log.Debug("read lock: ttl expired",
+				zap.String("id", id),
+				zap.Int("ttl", ttl),
+			)
+			r.rlocks.Remove(id)
+		}))
 
 		return true
 	}
 
 	// here we know, that the associated with the resource value exists
-	r := l.data[resource]
-
-	// easy case, if we don't have any lock, wait doesn't matter here, since we can add the lock immediately
-	if r.rlocks.Len() >= 0 && r.lock.Load() == nil {
-		r.rlocks.Append(id)
-
-		if ttl == 0 {
-			return true
-		}
-
-		l.timers.StoreAndWait(id, time.NewTimer(time.Second*time.Duration(ttl)), func() {
-			if r.rlocks.Remove(id) {
-				// signal the goroutine on the Wait (if waiting)
-				l.cond.Signal()
-			}
-		})
-
-		return true
-	}
+	rr, _ := l.resources.Load(res)
+	r := rr.(*resource)
 
 	// write lock exists
-	if r.lock.Load() != nil && wait == 0 {
+	if *r.lock.Load() != "" {
 		return false
 	}
 
-	if r.lock.Load() != nil && wait != 0 {
-		tryMore := atomic.Bool{}
-		tryMore.Store(true)
-
-		stopTimerCh := make(chan struct{}, 1)
-
-		go func() {
-			waitT := time.NewTimer(time.Second * time.Duration(wait))
-			for {
-				select {
-				case <-stopTimerCh:
-					if !waitT.Stop() {
-						waitT.Reset(time.Nanosecond)
-						<-waitT.C
-					}
-					return
-				case <-waitT.C:
-					tryMore.Store(false)
-					l.cond.Signal()
-					return
-				}
-			}
-		}()
-
-		// if we have read-locks OR write locks
-		l.cond.L.Lock()
-		// we don't need to check the read locks here, since we can have any number of the active read locks
-		for r.lock.Load() != nil {
-			// pass 1 waiting goroutine for the release method
-			l.cond.Wait()
-			if tryMore.Load() {
-				continue
-			}
-
-			l.cond.L.Unlock()
-			return false
-		}
-
-		// stop the wait timer
-		stopTimerCh <- struct{}{}
-
-		if r.lock.Load() != nil {
-			panic("lock_read: mutual access which is protected by mutexes")
-		}
+	// easy case, if we don't have any lock, wait doesn't matter here, since we can add the lock immediately
+	if r.rlocks.Len() >= 0 && *r.lock.Load() == "" {
 		r.rlocks.Append(id)
 
 		if ttl == 0 {
-			l.cond.L.Unlock()
 			return true
 		}
 
-		l.timers.StoreAndWait(id, time.NewTimer(time.Second*time.Duration(ttl)), func() {
-			if r.rlocks.Remove(id) {
-				// signal the goroutine on the Wait (if waiting)
-				l.cond.Signal()
-			}
-		})
+		l.queue.Insert(newItem(res, id, ttl, func() {
+			l.log.Debug("read lock: ttl expired",
+				zap.String("id", id),
+				zap.Int("ttl", ttl),
+			)
+			r.rlocks.Remove(id)
+		}))
 
-		l.cond.L.Unlock()
 		return true
 	}
 
 	return false
 }
 
-func (l *locker) release(resource, id string) bool {
-	l.cond.L.Lock()
-	defer l.cond.L.Unlock()
+func (l *locker) release(res, id string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
-	if _, ok := l.data[resource]; !ok {
+	if _, ok := l.resources.Load(res); !ok {
+		l.log.Debug("no such resource", zap.String("id", id))
 		return false
 	}
 
-	r := l.data[resource]
+	// here we know, that the associated with the resource value exists
+	rr, _ := l.resources.Load(res)
+	r := rr.(*resource)
 
 	// we have a lock
-	if r.lock.Load() != nil {
+	if *r.lock.Load() != "" {
 		lock := *r.lock.Load()
 		// check if we may unlock the lock
 		if lock == id {
-			l.timers.Stop(id)
-			r.lock.Store(nil)
-			l.cond.Signal()
+			l.log.Debug("lock released",
+				zap.String("original ID", id),
+				zap.String("lock ID", *r.lock.Load()))
+
+			l.queue.Remove(id)
+
+			r.lock.Store(ptrTo(""))
 			return true
 		}
 
@@ -358,49 +297,47 @@ func (l *locker) release(resource, id string) bool {
 	// we have a read-lock
 	if r.rlocks.Len() >= 1 {
 		if r.rlocks.Remove(id) {
-			// signal the goroutine on the Wait (if waiting)
-			l.cond.Signal()
+			l.log.Debug("read lock released", zap.String("ID", id))
 			return true
 		}
-
-		// no element with such ID
-		return false
 	}
 
-	// ?? how to get here
+	l.log.Debug("no lock registered with provided ID", zap.String("ID", id))
 	return false
 }
 
-func (l *locker) forceRelease(resource string) bool {
+func (l *locker) forceRelease(res string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if r, ok := l.data[resource]; ok {
-		if r.lock.Load() != nil {
+	if rr, ok := l.resources.LoadAndDelete(res); ok {
+		r := rr.(*resource)
+		if *r.lock.Load() != "" {
 			id := *r.lock.Load()
-			l.timers.Stop(id)
+			l.queue.Remove(id)
 			return true
 		}
 
 		if r.rlocks.Len() > 0 {
 			ids := r.rlocks.RemoveAll()
 			for i := 0; i < len(ids); i++ {
-				l.timers.Stop(ids[i])
+				l.queue.Remove(ids[i])
 			}
+
+			return true
 		}
 	}
 
-	delete(l.data, resource)
-
-	return true
+	return false
 }
 
-func (l *locker) exists(resource, id string) bool {
+func (l *locker) exists(res, id string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if r, ok := l.data[resource]; ok {
-		if r.lock.Load() != nil && *r.lock.Load() == id {
+	if rr, ok := l.resources.Load(res); ok {
+		r := rr.(*resource)
+		if *r.lock.Load() == id {
 			return true
 		}
 
@@ -412,11 +349,11 @@ func (l *locker) exists(resource, id string) bool {
 	return false
 }
 
-func (l *locker) updateTTL(resource, id string, ttl int) bool {
+func (l *locker) updateTTL(res, id string, ttl int) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if _, ok := l.data[resource]; !ok {
+	if _, ok := l.resources.Load(res); !ok {
 		l.log.Debug("no such resource")
 		return false
 	}
@@ -426,25 +363,75 @@ func (l *locker) updateTTL(resource, id string, ttl int) bool {
 		return false
 	}
 
-	r := l.data[resource]
+	// here we know, that the associated with the resource value exists
+	rr, _ := l.resources.Load(res)
+	r := rr.(*resource)
 
-	// update the TTL for the lock
-	if (r.lock.Load() != nil && *r.lock.Load() == id) || (r.lock.Load() == nil && r.rlocks.Exists(id)) {
-		l.log.Debug("updating the TTL",
-			zap.String("resource", resource),
+	if *r.lock.Load() == "" {
+		if r.rlocks.Exists(id) {
+			vals := l.queue.Remove(id)
+			// TTL expired
+			if len(vals) == 0 {
+				l.log.Debug("TTL already expired",
+					zap.String("resource", res),
+					zap.String("id", id),
+					zap.Int("ttl", ttl),
+				)
+				return false
+			}
+
+			l.log.Debug("updating read-lock TTL",
+				zap.String("resource", res),
+				zap.String("id", id),
+				zap.Int("ttl", ttl),
+			)
+
+			l.queue.Insert(newItem(res, id, ttl, func() {
+				l.log.Debug("updated rlock: ttl expired",
+					zap.String("id", id),
+					zap.Int("ttl", ttl),
+				)
+
+				r.rlocks.Remove(id)
+			}))
+		} else {
+			// no lock and read lock
+			return false
+		}
+	}
+
+	// we have lock
+	vals := l.queue.Remove(id)
+	// TTL expired
+	if len(vals) == 0 {
+		l.log.Debug("TTL already expired",
+			zap.String("resource", res),
 			zap.String("id", id),
 			zap.Int("ttl", ttl),
 		)
-		l.timers.UpdateTTL(id, ttl)
-		return true
+		return false
 	}
 
-	l.log.Debug("no such id registered",
-		zap.String("resource", resource),
+	// update the TTL for the lock
+	l.log.Debug("updating lock TTL",
+		zap.String("resource", res),
 		zap.String("id", id),
+		zap.Int("ttl", ttl),
 	)
 
-	return false
+	l.queue.Insert(newItem(res, id, ttl, func() {
+		l.log.Debug("lock: ttl expired",
+			zap.String("id", id),
+			zap.Int("ttl", ttl),
+		)
+		r.lock.Store(ptrTo(""))
+	}))
+
+	return true
+}
+
+func (l *locker) stop() {
+	l.stopCh <- struct{}{}
 }
 
 func ptrTo[T any](val T) *T {

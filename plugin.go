@@ -15,12 +15,26 @@ type Logger interface {
 
 type Plugin struct {
 	log   *zap.Logger
-	locks sync.Map // string -> *locker
+	locks *locker
 }
 
 func (p *Plugin) Init(log Logger) error {
 	p.log = log.NamedLogger(pluginName)
+	p.locks = NewLocker(p.log)
 	return nil
+}
+
+func (p *Plugin) Serve() chan error {
+	return make(chan error, 1)
+}
+
+func (p *Plugin) Stop() error {
+	p.locks.stop()
+	return nil
+}
+
+func (p *Plugin) Weight() uint {
+	return 80
 }
 
 func (p *Plugin) Name() string {
@@ -28,5 +42,9 @@ func (p *Plugin) Name() string {
 }
 
 func (p *Plugin) RPC() any {
-	return nil
+	return &rpc{
+		log: p.log,
+		mu:  sync.Mutex{},
+		pl:  p,
+	}
 }
