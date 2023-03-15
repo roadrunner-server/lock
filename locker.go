@@ -346,6 +346,15 @@ func (l *locker) exists(res, id string) bool {
 
 	if rr, ok := l.resources.Load(res); ok {
 		r := rr.(*resource)
+
+		if id == "" {
+			if *r.lock.Load() != "" || r.rlocks.Len() > 0 {
+				return true
+			}
+
+			return false
+		}
+
 		if *r.lock.Load() == id {
 			return true
 		}

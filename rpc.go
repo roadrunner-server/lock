@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	lockApi "go.buf.build/protocolbuffers/go/roadrunner-server/api/lock/v1"
+	lockApi "go.buf.build/protocolbuffers/go/roadrunner-server/api/lock/v1beta1"
 	"go.uber.org/zap"
 )
 
@@ -15,7 +15,7 @@ type rpc struct {
 	pl  *Plugin
 }
 
-func (r *rpc) Lock(req *lockApi.Lock, resp *lockApi.Response) error {
+func (r *rpc) Lock(req *lockApi.Request, resp *lockApi.Response) error {
 	// fast-path, when wait is eq to 0
 	r.log.Debug("lock request received", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
 	if req.GetWait() == 0 {
@@ -70,7 +70,7 @@ func (r *rpc) Lock(req *lockApi.Lock, resp *lockApi.Response) error {
 	return nil
 }
 
-func (r *rpc) LockRead(req *lockApi.Lock, resp *lockApi.Response) error {
+func (r *rpc) LockRead(req *lockApi.Request, resp *lockApi.Response) error {
 	// fast-path, when wait is eq to 0
 	r.log.Debug("lock request received", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
 	if req.GetWait() == 0 {
@@ -125,21 +125,21 @@ func (r *rpc) LockRead(req *lockApi.Lock, resp *lockApi.Response) error {
 	return nil
 }
 
-func (r *rpc) Release(req *lockApi.Release, resp *lockApi.Response) error {
+func (r *rpc) Release(req *lockApi.Request, resp *lockApi.Response) error {
 	resp.Ok = r.pl.locks.release(req.GetResource(), req.GetId())
 	return nil
 }
 
-func (r *rpc) ForceRelease(req *lockApi.Lock, resp *lockApi.Response) error {
+func (r *rpc) ForceRelease(req *lockApi.Request, resp *lockApi.Response) error {
 	resp.Ok = r.pl.locks.forceRelease(req.GetResource())
 	return nil
 }
 
-func (r *rpc) Exists(req *lockApi.Lock, resp *lockApi.Response) error {
+func (r *rpc) Exists(req *lockApi.Request, resp *lockApi.Response) error {
 	resp.Ok = r.pl.locks.exists(req.GetResource(), req.GetId())
 	return nil
 }
-func (r *rpc) UpdateTTL(req *lockApi.Lock, resp *lockApi.Response) error {
+func (r *rpc) UpdateTTL(req *lockApi.Request, resp *lockApi.Response) error {
 	resp.Ok = r.pl.locks.updateTTL(req.GetResource(), req.GetId(), int(req.GetTtl()))
 	return nil
 }
