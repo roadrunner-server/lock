@@ -32,6 +32,15 @@ func (r *rpc) Lock(req *lockApi.Request, resp *lockApi.Response) error {
 		return nil
 	}
 
+	acq := r.pl.locks.lock(req.GetResource(), req.GetId(), int(req.GetTtl()))
+	if acq {
+		r.log.Debug("lock successfully acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
+		resp.Ok = true
+		return nil
+	}
+
+	r.log.Debug("acquire attempt failed, retrying in 1s", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
+
 	timer := time.NewTicker(time.Second)
 	defer timer.Stop()
 
@@ -86,6 +95,14 @@ func (r *rpc) LockRead(req *lockApi.Request, resp *lockApi.Response) error {
 		resp.Ok = false
 		return nil
 	}
+
+	if r.pl.locks.lockRead(req.GetResource(), req.GetId(), int(req.GetTtl())) {
+		r.log.Debug("lock successfully acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
+		resp.Ok = true
+		return nil
+	}
+
+	r.log.Debug("acquire attempt failed, retrying in 1s", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
 
 	timer := time.NewTicker(time.Second)
 	defer timer.Stop()
