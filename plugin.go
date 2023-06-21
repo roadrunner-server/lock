@@ -20,7 +20,7 @@ type Plugin struct {
 
 func (p *Plugin) Init(log Logger) error {
 	p.log = log.NamedLogger(pluginName)
-	p.locks = NewLocker(p.log)
+	p.locks = newLocker(p.log)
 	return nil
 }
 

@@ -33,6 +33,11 @@ func (i item) ID() string {
 	return i.id
 }
 
+// TODO: use resource as GroupID
+func (i item) GroupID() string {
+	return ""
+}
+
 func (i item) TTL() int {
 	return i.ttl
 }

@@ -27,12 +27,12 @@ type locker struct {
 	// used in the CAS algorithm to check if we have mutex acquired
 	locked *int64
 	queue  *pq.BinHeap[item]
-	mu     sync.Mutex //
+	mu     sync.Mutex
 
-	resources sync.Map //map[string]*res
+	resources sync.Map // map[string]*res
 }
 
-func NewLocker(log *zap.Logger) *locker {
+func newLocker(log *zap.Logger) *locker {
 	l := &locker{
 		queue:  pq.NewBinHeap[item](1000),
 		log:    log,
