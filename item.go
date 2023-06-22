@@ -21,21 +21,18 @@ func newItem(res, id string, ttl int, onExpire func()) item {
 	}
 }
 
-func (i item) Priority() int64 {
-	return i.priority
-}
-
-func (i item) Resource() string {
-	return i.resource
-}
-
 func (i item) ID() string {
 	return i.id
 }
 
-// TODO: use resource as GroupID
+func (i item) Priority() int64 {
+	return i.priority
+}
+
+// TODO realize more performant way to delete 1 item
+// GroupID uses id to delete only 1 item (they all have unique ID's)
 func (i item) GroupID() string {
-	return ""
+	return i.id
 }
 
 func (i item) TTL() int {
