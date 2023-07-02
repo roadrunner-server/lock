@@ -2,7 +2,6 @@ package lock
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	lockApi "go.buf.build/protocolbuffers/go/roadrunner-server/api/lock/v1beta1"
@@ -11,7 +10,6 @@ import (
 
 type rpc struct {
 	log *zap.Logger
-	mu  sync.Mutex
 	pl  *Plugin
 }
 
@@ -78,10 +76,14 @@ func (r *rpc) ForceRelease(req *lockApi.Request, resp *lockApi.Response) error {
 }
 
 func (r *rpc) Exists(req *lockApi.Request, resp *lockApi.Response) error {
-	// resp.Ok = r.pl.locks.exists(req.GetResource(), req.GetId())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	resp.Ok = r.pl.locks.exists(ctx, req.GetResource(), req.GetId())
+	cancel()
 	return nil
 }
 func (r *rpc) UpdateTTL(req *lockApi.Request, resp *lockApi.Response) error {
-	// resp.Ok = r.pl.locks.updateTTL(req.GetResource(), req.GetId(), int(req.GetTtl()))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	resp.Ok = r.pl.locks.updateTTL(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
+	cancel()
 	return nil
 }
