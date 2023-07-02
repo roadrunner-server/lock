@@ -16,24 +16,19 @@ type rpc struct {
 }
 
 func (r *rpc) Lock(req *lockApi.Request, resp *lockApi.Response) error {
-	// fast-path, when wait is eq to 0
 	r.log.Debug("lock request received", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-	if req.GetWait() == 0 {
-		// locker
-		acq := r.pl.locks.lock(context.Background(), req.GetResource(), req.GetId(), int(req.GetTtl()))
-		if acq {
-			r.log.Debug("lock successfully acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-			resp.Ok = true
-			return nil
-		}
 
-		r.log.Debug("failed to acquire lock, already acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-		resp.Ok = false
-		return nil
+	var ctx context.Context
+	var cancel context.CancelFunc
+
+	switch req.GetWait() {
+	case int64(0):
+		ctx = context.Background()
+	default:
+		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
+		defer cancel()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
-	defer cancel()
 	acq := r.pl.locks.lock(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
 	if acq {
 		r.log.Debug("lock successfully acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
@@ -41,10 +36,34 @@ func (r *rpc) Lock(req *lockApi.Request, resp *lockApi.Response) error {
 		return nil
 	}
 
+	r.log.Debug("failed to acquire lock, already acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
+	resp.Ok = false
 	return nil
 }
 
 func (r *rpc) LockRead(req *lockApi.Request, resp *lockApi.Response) error {
+	r.log.Debug("read lock request received", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
+
+	var ctx context.Context
+	var cancel context.CancelFunc
+
+	switch req.GetWait() {
+	case int64(0):
+		ctx = context.Background()
+	default:
+		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
+		defer cancel()
+	}
+
+	acq := r.pl.locks.lockRead(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
+	if acq {
+		r.log.Debug("rlock successfully acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
+		resp.Ok = true
+		return nil
+	}
+
+	r.log.Debug("failed to acquire rlock, already acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
+	resp.Ok = false
 	return nil
 }
 
