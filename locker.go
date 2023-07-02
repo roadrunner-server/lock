@@ -2,7 +2,6 @@ package lock
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,8 +14,9 @@ import (
 type callback func(id string, notifiCh chan<- struct{}, stopCh <-chan struct{})
 
 type item struct {
-	callback callback
-	stopCh   chan struct{}
+	callback    callback
+	stopCh      chan struct{}
+	updateTTLCh chan int
 }
 type resourceC map[string]*item
 
@@ -73,7 +73,7 @@ func newLocker(log *zap.Logger) *locker {
 
 // lock used to acquire exclusive lock for the resource or promote read-lock to lock with the same ID
 /*
-Here may have the following scenarious:
+Here may have the following scenarios:
 - No resource associated with the resource ID, create resource, add callback if we have TTL, increate writers to 1.
 - Resource exists, no locks associated with it -> add callback if we have TTL, increase writers to 1
 - Resource exists, write lock already acquired. Wait on context and notification channel. Notification will be sent when the last lock is released.
@@ -86,8 +86,15 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 	select {
 	case <-l.muCh:
 		// hold release mutex as well
-		<-l.releaseMuCh
-		l.log.Debug("acquiring plugin's mutex")
+		select {
+		case <-l.releaseMuCh:
+			l.log.Debug("acquiring lock and release mutexes")
+		case <-ctx.Done():
+			l.log.Warn("timeout exceeded, failed to acquire release lock")
+			// we should return previously acquired lock mutex
+			l.muCh <- struct{}{}
+			return false
+		}
 	case <-ctx.Done():
 		l.log.Warn("timeout exceeded, failed to acquire a lock")
 		return false
@@ -126,56 +133,13 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			return false
 		}
 
-		stopCbCh := make(chan struct{})
-		// at this point, when adding lock, we should not have the callback
-		callb := func(lockID string, notifCh chan<- struct{}, sCh <-chan struct{}) {
-			// channel to forcibly remove the lock
-			ta := time.After(time.Microsecond * time.Duration(ttl))
-			// save the stop channel
-			select {
-			case <-ta:
-				l.log.Debug("lock: ttl expired",
-					zap.String("id", lockID),
-					zap.Int("ttl microseconds", ttl),
-				)
-			case <-sCh:
-				l.log.Debug("lock: ttl removed, broadcast call",
-					zap.String("id", lockID),
-					zap.Int("ttl microseconds", ttl),
-				)
-
-			case <-stopCbCh:
-				l.log.Debug("lock: ttl removed, callback call",
-					zap.String("id", lockID),
-					zap.Int("ttl microseconds", ttl),
-				)
-			}
-
-			r.mu.Lock()
-			delete(r.locks, id)
-			// we also have to check readers and writers
-			if r.writer.Load() == 1 || r.readerCount.Load() == 1 {
-				// only one resource, remove it
-				// and send notification to the notification channel
-				l.log.Debug("deleting the last lock, sending notification")
-				notifCh <- struct{}{}
-			}
-			r.mu.Unlock()
-			if r.writer.Load() == 1 {
-				r.writer.Store(0)
-				r.readerCount.Store(0)
-			}
-
-			if r.readerCount.Load() > 0 {
-				// reduce number of readers
-				r.readerCount.Add(^uint64(0))
-			}
-		}
+		callb, stopCbCh, updateTTLCh := l.makeWriteLockCallback(res, id, ttl, r)
 
 		r.mu.Lock()
 		r.locks[id] = &item{
-			callback: callb,
-			stopCh:   stopCbCh,
+			callback:    callb,
+			stopCh:      stopCbCh,
+			updateTTLCh: updateTTLCh,
 		}
 		r.mu.Unlock()
 
@@ -189,6 +153,8 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		return true
 	}
 
+	// get resource
+	// at this point both, lock and release lock should be acquired
 	r := l.resources[res]
 
 	// we don't have any lock associated with this resource
@@ -196,71 +162,23 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 	// we have writer
 	case r.readerCount.Load() == 0 && r.writer.Load() == 1: // case when we have only readers, should also check if there are only 1 reader and it's our reader
 		l.log.Debug("waiting to hold the mutex")
+
 		// allow releasing mutexes
+		// here we allowing to release mutexes, because some of them might not have TTL and should be released manually
 		l.releaseMuCh <- struct{}{}
 		select {
 		case <-r.notificationCh:
+			l.log.Debug("receive notification")
 			// get release mutex back
 			<-l.releaseMuCh
 
-			l.log.Debug("got notification")
-			r.mu.Lock()
-			fmt.Println(r.locks)
-			r.mu.Unlock()
-			println(r.writer.Load())
-			println(r.readerCount.Load())
-
-			stopCbCh := make(chan struct{})
-			// at this point, when adding lock, we should not have the callback
-			callb := func(lockID string, notifCh chan<- struct{}, sCh <-chan struct{}) {
-				// channel to forcibly remove the lock
-				ta := time.After(time.Microsecond * time.Duration(ttl))
-				// save the stop channel
-				select {
-				case <-ta:
-					l.log.Debug("lock: ttl expired",
-						zap.String("id", lockID),
-						zap.Int("ttl microseconds", ttl),
-					)
-				case <-sCh:
-					l.log.Debug("lock: ttl removed, broadcast call",
-						zap.String("id", lockID),
-						zap.Int("ttl microseconds", ttl),
-					)
-
-				case <-stopCbCh:
-					l.log.Debug("lock: ttl removed, callback call",
-						zap.String("id", lockID),
-						zap.Int("ttl microseconds", ttl),
-					)
-				}
-
-				r.mu.Lock()
-				delete(r.locks, id)
-				// we also have to check readers and writers
-				if r.writer.Load() == 1 || r.readerCount.Load() == 1 {
-					// only one resource, remove it
-					// and send notification to the notification channel
-					l.log.Debug("deleting the last lock, sending notification")
-					notifCh <- struct{}{}
-				}
-
-				r.mu.Unlock()
-				if r.writer.Load() == 1 {
-					r.writer.Store(0)
-					r.readerCount.Store(0)
-				}
-
-				if r.readerCount.Load() > 0 {
-					// reduce number of readers
-					r.readerCount.Add(^uint64(0))
-				}
-			}
+			callb, stopCbCh, updateTTLCh := l.makeWriteLockCallback(res, id, ttl, r)
 
 			r.mu.Lock()
 			r.locks[id] = &item{
-				callback: callb,
-				stopCh:   stopCbCh,
+				callback:    callb,
+				stopCh:      stopCbCh,
+				updateTTLCh: updateTTLCh,
 			}
 			r.mu.Unlock()
 
@@ -271,82 +189,43 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 
 			l.muCh <- struct{}{}
 			l.releaseMuCh <- struct{}{}
+
 			return true
 		case <-ctx.Done():
 			l.log.Debug("expired")
 		}
 
 	case r.readerCount.Load() > 0 && r.writer.Load() == 0:
-		l.log.Debug("only readers")
 		if r.readerCount.Load() == 1 {
+			l.log.Debug("checking readers to elevate rlock permissions")
 			r.mu.Lock()
 			if _, ok := r.locks[id]; ok {
 				// promote lock from read to write
+				l.log.Debug("found read lock which can be promoted to the write lock", zap.String("id", id))
 				r.stopCh <- struct{}{}
 			}
 			r.mu.Unlock()
+
 			// store writer and remove reader
 			r.writer.Store(1)
 			r.readerCount.Store(0)
 
 			if ttl == 0 {
 				// no need to use callback if we don't have timeout
+				// just release the mutexes
 				l.muCh <- struct{}{}
 				l.releaseMuCh <- struct{}{}
 				return true
 			}
 
-			stopCbCh := make(chan struct{})
-			// at this point, when adding lock, we should not have the callback
-			callb := func(lockID string, notifCh chan<- struct{}, sCh <-chan struct{}) {
-				// channel to forcibly remove the lock
-				ta := time.After(time.Microsecond * time.Duration(ttl))
-				// save the stop channel
-				select {
-				case <-ta:
-					l.log.Debug("lock: ttl expired",
-						zap.String("id", lockID),
-						zap.Int("ttl microseconds", ttl),
-					)
-				case <-sCh:
-					l.log.Debug("lock: ttl removed, broadcast call",
-						zap.String("id", lockID),
-						zap.Int("ttl microseconds", ttl),
-					)
-
-				case <-stopCbCh:
-					l.log.Debug("lock: ttl removed, callback call",
-						zap.String("id", lockID),
-						zap.Int("ttl microseconds", ttl),
-					)
-				}
-
-				r.mu.Lock()
-				delete(r.locks, id)
-				// we also have to check readers and writers
-				if r.writer.Load() == 1 || r.readerCount.Load() == 1 {
-					// only one resource, remove it
-					// and send notification to the notification channel
-					l.log.Debug("deleting the last lock, sending notification")
-					notifCh <- struct{}{}
-				}
-				r.mu.Unlock()
-
-				if r.writer.Load() == 1 {
-					r.writer.Store(0)
-					r.readerCount.Store(0)
-				}
-
-				if r.readerCount.Load() > 0 {
-					// reduce number of readers
-					r.readerCount.Add(^uint64(0))
-				}
-			}
+			// callback
+			callb, stopCbCh, updateTTLCh := l.makeWriteLockCallback(res, id, ttl, r)
 
 			r.mu.Lock()
 			r.locks[id] = &item{
-				callback: callb,
-				stopCh:   stopCbCh,
+				callback:    callb,
+				stopCh:      stopCbCh,
+				updateTTLCh: updateTTLCh,
 			}
 			r.mu.Unlock()
 
@@ -355,17 +234,50 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 				callb(id, r.notificationCh, r.stopCh)
 			}()
 
+			// return mutexes
 			l.muCh <- struct{}{}
 			l.releaseMuCh <- struct{}{}
 			return true
 		}
 
-		// at this point we know, that this is not ours mutexLocked
-
-		l.log.Debug("waiting for the mutex to unlock")
+		// at this point we know, that we have more than 1 read lock, so, we can't promote them to lock
+		l.log.Debug("waiting for the readlocks to expire/release")
 		select {
 		// we've got notification, that noone holding this mutex anymore
 		case <-r.notificationCh:
+			l.log.Debug("no readers holding mutex anymore, proceeding with acquiring write lock")
+			// store writer and remove reader
+			r.writer.Store(1)
+			r.readerCount.Store(0)
+
+			if ttl == 0 {
+				// no need to use callback if we don't have timeout
+				// just release the mutexes
+				l.muCh <- struct{}{}
+				l.releaseMuCh <- struct{}{}
+				return true
+			}
+
+			// callback
+			callb, stopCbCh, updateTTLCh := l.makeWriteLockCallback(res, id, ttl, r)
+
+			r.mu.Lock()
+			r.locks[id] = &item{
+				callback:    callb,
+				stopCh:      stopCbCh,
+				updateTTLCh: updateTTLCh,
+			}
+			r.mu.Unlock()
+
+			// run the callback
+			go func() {
+				callb(id, r.notificationCh, r.stopCh)
+			}()
+
+			// return mutexes
+			l.muCh <- struct{}{}
+			l.releaseMuCh <- struct{}{}
+			return true
 			// timeout exceeded
 		case <-ctx.Done():
 			return false
@@ -384,6 +296,8 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		if _, ok := r.locks[id]; ok {
 			l.log.Warn("id already exists", zap.String("id", id))
 			r.mu.Unlock()
+
+			// release mutex
 			l.muCh <- struct{}{}
 			l.releaseMuCh <- struct{}{}
 			return false
@@ -401,58 +315,13 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			return true
 		}
 
-		stopCbCh := make(chan struct{})
-		// at this point, when adding lock, we should not have the callback
-		callb := func(lockID string, notifCh chan<- struct{}, sCh <-chan struct{}) {
-			// channel to forcibly remove the lock
-			ta := time.After(time.Microsecond * time.Duration(ttl))
-			// save the stop channel
-			select {
-			case <-ta:
-				l.log.Debug("lock: ttl expired",
-					zap.String("id", lockID),
-					zap.Int("ttl microseconds", ttl),
-				)
-			case <-sCh:
-				l.log.Debug("lock: ttl removed, broadcast call",
-					zap.String("id", lockID),
-					zap.Int("ttl microseconds", ttl),
-				)
-
-			case <-stopCbCh:
-				l.log.Debug("lock: ttl removed, callback call",
-					zap.String("id", lockID),
-					zap.Int("ttl microseconds", ttl),
-				)
-			}
-
-			r.mu.Lock()
-			delete(r.locks, id)
-			// we also have to check readers and writers
-			if r.writer.Load() == 1 || r.readerCount.Load() == 1 {
-				// only one resource, remove it
-				// and send notification to the notification channel
-				l.log.Debug("deleting the last lock, sending notification")
-				notifCh <- struct{}{}
-			}
-
-			r.mu.Unlock()
-
-			if r.writer.Load() == 1 {
-				r.writer.Store(0)
-				r.readerCount.Store(0)
-			}
-
-			if r.readerCount.Load() > 0 {
-				// reduce number of readers
-				r.readerCount.Add(^uint64(0))
-			}
-		}
+		callb, stopCbCh, updateTTLCh := l.makeWriteLockCallback(res, id, ttl, r)
 
 		r.mu.Lock()
 		r.locks[id] = &item{
-			callback: callb,
-			stopCh:   stopCbCh,
+			callback:    callb,
+			stopCh:      stopCbCh,
+			updateTTLCh: updateTTLCh,
 		}
 		r.mu.Unlock()
 
@@ -468,6 +337,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 
 	l.muCh <- struct{}{}
 	l.releaseMuCh <- struct{}{}
+
 	return false
 }
 
@@ -568,6 +438,64 @@ func (l *locker) updateTTL(ctx context.Context, res, id string, ttl int) bool {
 	}()
 
 	return true
+}
+
+func (l *locker) makeWriteLockCallback(res, id string, ttl int, r *resource) (callback, chan struct{}, chan int) {
+	stopCbCh := make(chan struct{}, 1)
+	updateTTLCh := make(chan int, 1)
+
+	// at this point, when adding lock, we should not have the callback
+	return func(lockID string, notifCh chan<- struct{}, sCh <-chan struct{}) {
+		// channel to forcibly remove the lock
+		ta := time.NewTicker(time.Microsecond * time.Duration(ttl))
+		// save the stop channel
+	loop:
+		select {
+		case <-ta.C:
+			l.log.Debug("lock: ttl expired",
+				zap.String("id", lockID),
+				zap.Int("ttl microseconds", ttl),
+			)
+			ta.Stop()
+		case <-sCh:
+			l.log.Debug("lock: ttl removed, broadcast call",
+				zap.String("id", lockID),
+				zap.Int("ttl microseconds", ttl),
+			)
+			ta.Stop()
+		case <-stopCbCh:
+			l.log.Debug("lock: ttl removed, callback call",
+				zap.String("id", lockID),
+				zap.Int("ttl microseconds", ttl),
+			)
+			ta.Stop()
+		case newTTL := <-updateTTLCh:
+			l.log.Debug("updating lock ttl", zap.String("id", id), zap.String("res", res), zap.Int("new_ttl_microsec", newTTL))
+			ta.Reset(time.Microsecond * time.Duration(newTTL))
+			break loop
+		}
+
+		r.mu.Lock()
+		delete(r.locks, id)
+		// we also have to check readers and writers
+		if r.writer.Load() == 1 || r.readerCount.Load() == 1 {
+			// only one resource, remove it
+			// and send notification to the notification channel
+			l.log.Debug("deleting the last lock, sending notification")
+			notifCh <- struct{}{}
+		}
+		r.mu.Unlock()
+
+		if r.writer.Load() == 1 {
+			r.writer.Store(0)
+			r.readerCount.Store(0)
+		}
+
+		if r.readerCount.Load() > 0 {
+			// reduce number of readers
+			r.readerCount.Add(^uint64(0))
+		}
+	}, stopCbCh, updateTTLCh
 }
 
 func (l *locker) stop() {
