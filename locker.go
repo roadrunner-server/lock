@@ -80,38 +80,11 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 	// only 1 goroutine might be passed here at the time
 	// lock with timeout
 	// todo(rustatian): move to a function
-	select {
-	case <-l.muCh:
-		// hold release mutex as well
-		select {
-		case <-l.releaseMuCh:
-			l.log.Debug("acquired lock and release mutexes", zap.String("id", id))
-		case <-ctx.Done():
-			l.log.Warn("timeout exceeded, failed to acquire releaseMuCh", zap.String("id", id))
-			// we should return previously acquired lock mutex
-			select {
-			case l.muCh <- struct{}{}:
-				l.log.Debug("muCh lock returned", zap.String("id", id))
-			default:
-				l.log.Debug("muCh lock not returnen, channel is full", zap.String("id", id))
-			}
-			return false
-		}
-	case <-ctx.Done():
-		l.log.Warn("timeout exceeded, failed to acquire a lock", zap.String("id", id))
+	if !l.internalLock(ctx, id) {
 		return false
 	}
 
-	defer func() {
-		l.muCh <- struct{}{}
-
-		select {
-		case l.releaseMuCh <- struct{}{}:
-			l.log.Debug("releaseMuCh lock returned", zap.String("id", id))
-		default:
-			l.log.Debug("releaseMuCh lock not returned, channel is full", zap.String("id", id))
-		}
-	}()
+	defer l.internalUnLock(id)
 
 	// if there is no lock for the provided resource -> create it
 	// assume that this is the first call to the lock with this resource and hash
@@ -312,42 +285,11 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 	// only 1 goroutine might be passed here at the time
 	// lock with timeout
 	// todo(rustatian): move to a function
-	select {
-	case <-l.muCh:
-		// hold release mutex as well
-		select {
-		case <-l.releaseMuCh:
-			l.log.Debug("acquiring muCh and release mutexes", zap.String("id", id))
-		case <-ctx.Done():
-			l.log.Warn("timeout exceeded, failed to acquire release lock", zap.String("id", id))
-			// we should return previously acquired lock mutex
-			select {
-			case l.muCh <- struct{}{}:
-				l.log.Debug("muCh lock returned", zap.String("id", id))
-			default:
-				l.log.Debug("muCh lock not returnen, channel is full", zap.String("id", id))
-			}
-			return false
-		}
-	case <-ctx.Done():
-		l.log.Warn("timeout exceeded, failed to acquire a read lock", zap.String("id", id))
+	if !l.internalLock(ctx, id) {
 		return false
 	}
 
-	defer func() {
-		select {
-		case l.muCh <- struct{}{}:
-			l.log.Debug("muCh lock returned", zap.String("id", id))
-		default:
-			l.log.Debug("muCh lock not returnen, channel is full", zap.String("id", id))
-		}
-		select {
-		case l.releaseMuCh <- struct{}{}:
-			l.log.Debug("releaseMuCh lock returned", zap.String("id", id))
-		default:
-			l.log.Debug("releaseMuCh lock not returned, channel is full", zap.String("id", id))
-		}
-	}()
+	defer l.internalUnLock(id)
 
 	// check for the first call for this resource
 	if _, ok := l.resources.Load(res); !ok {
@@ -460,22 +402,10 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 }
 
 func (l *locker) release(ctx context.Context, res, id string) bool {
-	select {
-	case <-l.releaseMuCh:
-		l.log.Debug("acquired release mutex", zap.String("resource", res), zap.String("id", id))
-	case <-ctx.Done():
-		l.log.Warn("timeout exceeded, failed to acquire a lock", zap.String("id", id))
+	if !l.internalReleaseLock(ctx, id) {
 		return false
 	}
-	defer func() {
-		select {
-		case l.releaseMuCh <- struct{}{}:
-			l.log.Debug("releaseMuCh lock returned", zap.String("id", id))
-		default:
-			l.log.Debug("releaseMuCh lock not returned, channel is full", zap.String("id", id))
-			break
-		}
-	}()
+	defer l.internalReleaseUnLock(id)
 
 	if _, ok := l.resources.Load(res); !ok {
 		l.log.Warn("no such resource", zap.String("resource", res), zap.String("id", id))
@@ -499,21 +429,11 @@ func (l *locker) release(ctx context.Context, res, id string) bool {
 }
 
 func (l *locker) forceRelease(ctx context.Context, res string) bool {
-	select {
-	case <-l.releaseMuCh:
-	case <-ctx.Done():
-		l.log.Warn("timeout exceeded, failed to acquire a forceRelease lock")
+	if !l.internalReleaseLock(ctx, res) {
 		return false
 	}
-	defer func() {
-		select {
-		case l.releaseMuCh <- struct{}{}:
-			l.log.Debug("releaseMuCh lock returned")
-		default:
-			l.log.Debug("releaseMuCh lock not returned, channel is full")
-			break
-		}
-	}()
+
+	defer l.internalReleaseUnLock(res)
 
 	l.log.Debug("force release mutex obtained", zap.String("res", res))
 
@@ -542,44 +462,14 @@ func (l *locker) forceRelease(ctx context.Context, res string) bool {
 }
 
 func (l *locker) exists(ctx context.Context, res, id string) bool {
-	select {
-	case <-l.muCh:
-		// hold release mutex as well
-		select {
-		case <-l.releaseMuCh:
-			l.log.Debug("acquiring exists and release mutexes")
-		case <-ctx.Done():
-			l.log.Warn("timeout exceeded, failed to acquire release lock")
-			// we should return previously acquired lock mutex
-			l.muCh <- struct{}{}
-			return false
-		}
-	case <-ctx.Done():
-		l.log.Warn("timeout exceeded, failed to acquire an 'exist' operation lock")
+	if !l.internalLock(ctx, id) {
 		return false
 	}
-
-	defer func() {
-		select {
-		case l.muCh <- struct{}{}:
-			l.log.Debug("muCh lock returned")
-		default:
-			l.log.Debug("muCh lock not returnen, channel is full")
-			break
-		}
-		select {
-		case l.releaseMuCh <- struct{}{}:
-			l.log.Debug("releaseMuCh lock returned")
-		default:
-			l.log.Debug("releaseMuCh lock not returned, channel is full")
-			break
-		}
-	}()
+	defer l.internalUnLock(id)
 
 	rr, ok := l.resources.Load(res)
 	if !ok {
 		l.log.Warn("no such resource", zap.String("resource", res), zap.String("id", id))
-
 		return false
 	}
 
@@ -594,38 +484,10 @@ func (l *locker) exists(ctx context.Context, res, id string) bool {
 }
 
 func (l *locker) updateTTL(ctx context.Context, res, id string, ttl int) bool {
-	select {
-	case <-l.muCh:
-		// hold release mutex as well
-		select {
-		case <-l.releaseMuCh:
-			l.log.Debug("acquiring lock and release mutexes")
-		case <-ctx.Done():
-			l.log.Warn("timeout exceeded, failed to acquire release lock")
-			// we should return previously acquired lock mutex
-			l.muCh <- struct{}{}
-			return false
-		}
-	case <-ctx.Done():
-		l.log.Warn("timeout exceeded, failed to acquire updateTTL lock")
+	if !l.internalLock(ctx, id) {
 		return false
 	}
-	defer func() {
-		select {
-		case l.muCh <- struct{}{}:
-			l.log.Debug("muCh lock returned")
-		default:
-			l.log.Debug("muCh lock not returnen, channel is full")
-			break
-		}
-		select {
-		case l.releaseMuCh <- struct{}{}:
-			l.log.Debug("releaseMuCh lock returned")
-		default:
-			l.log.Debug("releaseMuCh lock not returned, channel is full")
-			break
-		}
-	}()
+	defer l.internalUnLock(id)
 
 	l.log.Debug("updateTTL started", zap.String("resource", res), zap.String("id", id))
 
@@ -717,52 +579,4 @@ func (l *locker) makeLockCallback(res, id string, ttl int, r *resource) (callbac
 			}
 		}
 	}, stopCbCh, updateTTLCh
-}
-
-func (l *locker) stop(ctx context.Context) {
-	l.log.Debug("received stop signal, acquiring lock/release mutexes")
-	select {
-	case <-l.muCh:
-		l.log.Debug("get muCh mutex")
-		// hold release mutex as well
-		select {
-		case <-l.releaseMuCh:
-			l.log.Debug("acquiring lock and release mutexes")
-		case <-ctx.Done():
-			l.log.Warn("timeout exceeded, failed to acquire release lock")
-			// we should return previously acquired lock mutex
-			l.muCh <- struct{}{}
-			return
-		}
-	case <-ctx.Done():
-		l.log.Warn("timeout exceeded, failed to acquire stop lock")
-		return
-	}
-
-	l.log.Debug("acquired stop mutex")
-
-	// release all mutexes
-	l.resources.Range(func(key, value any) bool {
-		k := key.(string)
-		v := value.(*resource)
-
-		close(v.stopCh)
-		l.log.Debug("closed broadcast channed", zap.String("id", k))
-		return true
-	})
-
-	select {
-	case l.muCh <- struct{}{}:
-		l.log.Debug("muCh lock returned")
-	default:
-		l.log.Debug("muCh lock not returnen, channel is full")
-	}
-	select {
-	case l.releaseMuCh <- struct{}{}:
-		l.log.Debug("releaseMuCh lock returned")
-	default:
-		l.log.Debug("releaseMuCh lock not returned, channel is full")
-	}
-
-	l.log.Debug("signal sent to all resources")
 }
