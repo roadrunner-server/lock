@@ -14,14 +14,15 @@ type rpc struct {
 }
 
 func (r *rpc) Lock(req *lockApi.Request, resp *lockApi.Response) error {
-	r.log.Debug("lock request received", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
+	r.log.Debug("lock request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
 
 	var ctx context.Context
 	var cancel context.CancelFunc
 
 	switch req.GetWait() {
 	case int64(0):
-		ctx = context.Background()
+		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond*100)
+		defer cancel()
 	default:
 		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
 		defer cancel()
@@ -29,25 +30,26 @@ func (r *rpc) Lock(req *lockApi.Request, resp *lockApi.Response) error {
 
 	acq := r.pl.locks.lock(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
 	if acq {
-		r.log.Debug("lock successfully acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
+		// r.log.Debug("lock successfully acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
 		resp.Ok = true
 		return nil
 	}
 
-	r.log.Debug("failed to acquire lock, already acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
+	// r.log.Debug("failed to acquire lock", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
 	resp.Ok = false
 	return nil
 }
 
 func (r *rpc) LockRead(req *lockApi.Request, resp *lockApi.Response) error {
-	r.log.Debug("read lock request received", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
+	r.log.Debug("read lock request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
 
 	var ctx context.Context
 	var cancel context.CancelFunc
 
 	switch req.GetWait() {
 	case int64(0):
-		ctx = context.Background()
+		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond*100)
+		defer cancel()
 	default:
 		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
 		defer cancel()
@@ -60,7 +62,7 @@ func (r *rpc) LockRead(req *lockApi.Request, resp *lockApi.Response) error {
 		return nil
 	}
 
-	r.log.Debug("failed to acquire rlock, already acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
+	r.log.Debug("failed to acquire rlock", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
 	resp.Ok = false
 	return nil
 }
@@ -82,7 +84,7 @@ func (r *rpc) Exists(req *lockApi.Request, resp *lockApi.Response) error {
 	return nil
 }
 func (r *rpc) UpdateTTL(req *lockApi.Request, resp *lockApi.Response) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	resp.Ok = r.pl.locks.updateTTL(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
 	cancel()
 	return nil

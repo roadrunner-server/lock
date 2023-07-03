@@ -18,7 +18,7 @@ type item struct {
 	stopCh      chan struct{}
 	updateTTLCh chan int
 }
-type resourceC map[string]*item
+type resourceC sync.Map // map[string]*item
 
 // resource
 type resource struct {
@@ -34,7 +34,7 @@ type resource struct {
 	// might be 1 lock in case of lock or multiply in case of RLock
 	// first map holds resource
 	// second - associated with the resource callbacks
-	locks resourceC
+	locks sync.Map // map[string]*item
 
 	// notificationCh used to notify that all locks are expired and user is free to obtain a new one
 	// this channel receive an event only if there are no locks (write/read)
@@ -52,7 +52,7 @@ type locker struct {
 	// release should be allowed only on the safe spots, e.g. waiting on notification
 	releaseMuCh chan struct{}
 	// all resources stored here
-	resources map[string]*resource
+	resources sync.Map // map[string]*resource
 }
 
 func newLocker(log *zap.Logger) *locker {
@@ -60,8 +60,9 @@ func newLocker(log *zap.Logger) *locker {
 		log:         log,
 		muCh:        make(chan struct{}, 1),
 		releaseMuCh: make(chan struct{}, 1),
-		resources:   make(map[string]*resource, 5),
+		resources:   sync.Map{}, // make(map[string]*resource, 5),
 	}
+	// init
 	l.muCh <- struct{}{}
 	l.releaseMuCh <- struct{}{}
 
@@ -85,11 +86,16 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		// hold release mutex as well
 		select {
 		case <-l.releaseMuCh:
-			l.log.Debug("acquiring lock and release mutexes")
+			l.log.Debug("acquired lock and release mutexes")
 		case <-ctx.Done():
-			l.log.Warn("timeout exceeded, failed to acquire release lock")
+			l.log.Warn("timeout exceeded, failed to acquire releaseMuCh")
 			// we should return previously acquired lock mutex
-			l.muCh <- struct{}{}
+			select {
+			case l.muCh <- struct{}{}:
+				l.log.Debug("muCh lock returned")
+			default:
+				l.log.Debug("muCh lock not returnen, channel is full")
+			}
 			return false
 		}
 	case <-ctx.Done():
@@ -97,9 +103,20 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		return false
 	}
 
+	defer func() {
+		l.muCh <- struct{}{}
+
+		select {
+		case l.releaseMuCh <- struct{}{}:
+			l.log.Debug("releaseMuCh lock returned")
+		default:
+			l.log.Debug("releaseMuCh lock not returned, channel is full")
+		}
+	}()
+
 	// if there is no lock for the provided resource -> create it
 	// assume that this is the first call to the lock with this resource and hash
-	if _, ok := l.resources[res]; !ok {
+	if _, ok := l.resources.Load(res); !ok {
 		l.log.Debug("no such resource, creating new",
 			zap.String("id", id),
 			zap.Int("ttl microseconds", ttl),
@@ -109,37 +126,35 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			mu:             sync.Mutex{},
 			notificationCh: make(chan struct{}, 1),
 			stopCh:         make(chan struct{}, 1),
-			locks:          make(resourceC, 1),
+			locks:          sync.Map{}, // make(resourceC, 1),
 		}
 
 		r.writerCount.Store(1)
 		r.readerCount.Store(0)
 
-		l.resources[res] = r
+		l.resources.Store(res, r)
+		// l.resources[res] = r
 
 		callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl, r)
 
-		r.mu.Lock()
-		r.locks[id] = &item{
+		r.locks.Store(id, &item{
 			callback:    callb,
 			stopCh:      stopCbCh,
 			updateTTLCh: updateTTLCh,
-		}
-		r.mu.Unlock()
+		})
 
 		// run the callback
 		go func() {
 			callb(id, r.notificationCh, r.stopCh)
 		}()
 
-		l.muCh <- struct{}{}
-		l.releaseMuCh <- struct{}{}
 		return true
 	}
 
 	// get resource
 	// at this point both, lock and release lock should be acquired
-	r := l.resources[res]
+	rr, _ := l.resources.Load(res)
+	r := rr.(*resource)
 
 	// we don't have any lock associated with this resource
 	switch {
@@ -151,9 +166,10 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		l.releaseMuCh <- struct{}{}
 		select {
 		case <-r.notificationCh:
-			l.log.Debug("receive notification")
+			l.log.Debug("all writers was removed, received notification")
 			// get release mutex back
 			<-l.releaseMuCh
+			l.log.Debug("got release mutex back")
 
 			// inconsistent, still have readers/writers after notification
 			if r.writerCount.Load() != 0 && r.readerCount.Load() != 0 {
@@ -166,25 +182,19 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 
 			callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl, r)
 
-			r.mu.Lock()
-			r.locks[id] = &item{
+			r.locks.Store(id, &item{
 				callback:    callb,
 				stopCh:      stopCbCh,
 				updateTTLCh: updateTTLCh,
-			}
-			r.mu.Unlock()
-
+			})
 			// run the callback
 			go func() {
 				callb(id, r.notificationCh, r.stopCh)
 			}()
 
-			l.muCh <- struct{}{}
-			l.releaseMuCh <- struct{}{}
-
 			return true
 		case <-ctx.Done():
-			l.log.Debug("wait timeout expired")
+			l.log.Debug("lock notification wait timeout expired")
 			return false
 		}
 
@@ -192,18 +202,19 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		// check if that's possible to elevate read lock permission to write
 		if r.readerCount.Load() == 1 {
 			l.log.Debug("checking readers to elevate rlock permissions")
-			r.mu.Lock()
 
-			// check
-			if _, ok := r.locks[id]; ok {
+			rr, ok := r.locks.Load(id)
+			if ok {
 				// promote lock from read to write
 				l.log.Debug("found read lock which can be promoted to write lock", zap.String("id", id))
 				// send stop signal to the particular lock
-				close(r.locks[id].stopCh)
+				close(rr.(*item).stopCh)
 			}
-			r.mu.Unlock()
+
 			// wait for the notification
+			l.log.Debug("waiting for the notification r==1")
 			<-r.notificationCh
+			l.log.Debug("r==1 notification received")
 
 			// inconsistent, still have readers/writers after notification
 			if r.writerCount.Load() != 0 && r.readerCount.Load() != 0 {
@@ -218,22 +229,16 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			// callback
 			callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl, r)
 
-			r.mu.Lock()
-			r.locks[id] = &item{
+			r.locks.Store(id, &item{
 				callback:    callb,
 				stopCh:      stopCbCh,
 				updateTTLCh: updateTTLCh,
-			}
-			r.mu.Unlock()
+			})
 
 			// run the callback
 			go func() {
 				callb(id, r.notificationCh, r.stopCh)
 			}()
-
-			// return mutexes
-			l.muCh <- struct{}{}
-			l.releaseMuCh <- struct{}{}
 
 			return true
 		}
@@ -251,22 +256,16 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			// callback
 			callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl, r)
 
-			r.mu.Lock()
-			r.locks[id] = &item{
+			r.locks.Store(id, &item{
 				callback:    callb,
 				stopCh:      stopCbCh,
 				updateTTLCh: updateTTLCh,
-			}
-			r.mu.Unlock()
+			})
 
 			// run the callback
 			go func() {
 				callb(id, r.notificationCh, r.stopCh)
 			}()
-
-			// return mutexes
-			l.muCh <- struct{}{}
-			l.releaseMuCh <- struct{}{}
 
 			return true
 			// timeout exceeded
@@ -283,45 +282,25 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			break
 		}
 
-		// double check the ID
-		r.mu.Lock()
-		if _, ok := r.locks[id]; ok {
-			l.log.Warn("id already exists", zap.String("id", id))
-			r.mu.Unlock()
-
-			// release mutex
-			l.muCh <- struct{}{}
-			l.releaseMuCh <- struct{}{}
-			return false
-		}
-		r.mu.Unlock()
-
 		// store the writer
 		r.writerCount.Store(1)
 		r.readerCount.Store(0)
 
 		callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl, r)
 
-		r.mu.Lock()
-		r.locks[id] = &item{
+		r.locks.Store(id, &item{
 			callback:    callb,
 			stopCh:      stopCbCh,
 			updateTTLCh: updateTTLCh,
-		}
-		r.mu.Unlock()
+		})
 
 		// run the callback
 		go func() {
 			callb(id, r.notificationCh, r.stopCh)
 		}()
 
-		l.muCh <- struct{}{}
-		l.releaseMuCh <- struct{}{}
 		return true
 	}
-
-	l.muCh <- struct{}{}
-	l.releaseMuCh <- struct{}{}
 
 	return false
 }
@@ -347,8 +326,25 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 		return false
 	}
 
+	defer func() {
+		select {
+		case l.muCh <- struct{}{}:
+			l.log.Debug("muCh lock returned")
+		default:
+			l.log.Debug("muCh lock not returnen, channel is full")
+			break
+		}
+		select {
+		case l.releaseMuCh <- struct{}{}:
+			l.log.Debug("releaseMuCh lock returned")
+		default:
+			l.log.Debug("releaseMuCh lock not returned, channel is full")
+			break
+		}
+	}()
+
 	// check for the first call for this resource
-	if _, ok := l.resources[res]; !ok {
+	if _, ok := l.resources.Load(res); !ok {
 		l.log.Debug("no such resource, creating new",
 			zap.String("id", id),
 			zap.Int("ttl microseconds", ttl),
@@ -358,45 +354,33 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 			mu:             sync.Mutex{},
 			notificationCh: make(chan struct{}, 1),
 			stopCh:         make(chan struct{}, 1),
-			locks:          make(resourceC, 1),
+			locks:          sync.Map{}, // make(resourceC, 1),
 		}
 
 		r.writerCount.Store(0)
 		r.readerCount.Store(1)
 		// save resource
-		l.resources[res] = r
-
-		// user requested lock, check it by ID
-		if _, ok := r.locks[id]; ok {
-			l.log.Warn("id already exists", zap.String("id", id))
-
-			l.muCh <- struct{}{}
-			l.releaseMuCh <- struct{}{}
-			return false
-		}
+		l.resources.Store(res, r)
 
 		// we have TTL, create callback
 		callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl, r)
 
-		r.mu.Lock()
-		r.locks[id] = &item{
+		r.locks.Store(id, &item{
 			callback:    callb,
 			stopCh:      stopCbCh,
 			updateTTLCh: updateTTLCh,
-		}
-		r.mu.Unlock()
+		})
 
 		// run the callback
 		go func() {
 			callb(id, r.notificationCh, r.stopCh)
 		}()
 
-		l.muCh <- struct{}{}
-		l.releaseMuCh <- struct{}{}
 		return true
 	}
 
-	r := l.resources[res]
+	rr, _ := l.resources.Load(res)
+	r := rr.(*resource)
 
 	// check tricky cases
 	switch {
@@ -421,21 +405,16 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 
 			callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl, r)
 
-			r.mu.Lock()
-			r.locks[id] = &item{
+			r.locks.Store(id, &item{
 				callback:    callb,
 				stopCh:      stopCbCh,
 				updateTTLCh: updateTTLCh,
-			}
-			r.mu.Unlock()
+			})
 
 			// run the callback
 			go func() {
 				callb(id, r.notificationCh, r.stopCh)
 			}()
-
-			l.muCh <- struct{}{}
-			l.releaseMuCh <- struct{}{}
 
 			return true
 		case <-ctx.Done():
@@ -452,26 +431,22 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 		// we have TTL, create callback
 		callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl, r)
 
-		r.mu.Lock()
-		r.locks[id] = &item{
+		r.locks.Store(id, &item{
 			callback:    callb,
 			stopCh:      stopCbCh,
 			updateTTLCh: updateTTLCh,
-		}
-		r.mu.Unlock()
+		})
 
 		// run the callback
 		go func() {
 			callb(id, r.notificationCh, r.stopCh)
 		}()
 
-		l.muCh <- struct{}{}
-		l.releaseMuCh <- struct{}{}
-
 		return true
+	default:
+		l.log.Error("unknown readlock state")
+		return false
 	}
-
-	return false
 }
 
 func (l *locker) release(ctx context.Context, res, id string) bool {
@@ -483,24 +458,32 @@ func (l *locker) release(ctx context.Context, res, id string) bool {
 		return false
 	}
 	defer func() {
-		l.releaseMuCh <- struct{}{}
+		select {
+		case l.releaseMuCh <- struct{}{}:
+			l.log.Debug("releaseMuCh lock returned")
+		default:
+			l.log.Debug("releaseMuCh lock not returned, channel is full")
+			break
+		}
 	}()
 
-	if _, ok := l.resources[res]; !ok {
+	if _, ok := l.resources.Load(res); !ok {
 		l.log.Warn("no such resource", zap.String("resource", res), zap.String("id", id))
 		return false
 	}
 
-	if _, ok := l.resources[res].locks[id]; !ok {
+	rr, _ := l.resources.Load(res)
+	r := rr.(*resource)
+
+	rl, ok := r.locks.Load(id)
+	if !ok {
 		l.log.Warn("no such resource ID", zap.String("resource", res), zap.String("id", id))
+		r.mu.Unlock()
 		return false
 	}
 
-	rs := l.resources[res]
-	rs.mu.Lock()
 	// notify close by closing stopCh for the particular ID
-	close(rs.locks[id].stopCh)
-	rs.mu.Unlock()
+	close(rl.(*item).stopCh)
 
 	l.log.Debug("lock successfully released", zap.String("id", id))
 	return true
@@ -510,40 +493,43 @@ func (l *locker) forceRelease(ctx context.Context, res string) bool {
 	select {
 	case <-l.releaseMuCh:
 	case <-ctx.Done():
-		l.log.Warn("timeout exceeded, failed to acquire a lock")
+		l.log.Warn("timeout exceeded, failed to acquire a forceRelease lock")
 		return false
 	}
 	defer func() {
-		l.releaseMuCh <- struct{}{}
+		select {
+		case l.releaseMuCh <- struct{}{}:
+			l.log.Debug("releaseMuCh lock returned")
+		default:
+			l.log.Debug("releaseMuCh lock not returned, channel is full")
+			break
+		}
 	}()
 
-	if _, ok := l.resources[res]; !ok {
+	l.log.Debug("force release mutex obtained")
+
+	if _, ok := l.resources.Load(res); !ok {
 		l.log.Warn("no such resource", zap.String("resource", res))
 		return false
 	}
 
-	r := l.resources[res]
-	r.mu.Lock()
+	r, _ := l.resources.Load(res)
+	rr := r.(*resource)
 	// broadcast release signal
-	for _, v := range r.locks {
+
+	rr.locks.Range(func(key, value any) bool {
+		k := key.(string)
+		v := value.(*item)
 		select {
 		case v.stopCh <- struct{}{}:
+			l.log.Debug("force release notification sent", zap.String("id", k))
 		default:
-			continue
 		}
-	}
-	// recreate stop channel
-	r.mu.Unlock()
-
-	select {
-	case <-r.notificationCh:
-		l.log.Debug("all locks dedicated to the resource are released", zap.String("resource", res))
-		delete(l.resources, res)
 		return true
-	case <-ctx.Done():
-		l.log.Error("critical error: failed to release locks for the resource", zap.String("resource", res))
-		return false
-	}
+	})
+
+	l.log.Debug("all force-release messages sent", zap.String("resource", res))
+	return true
 }
 
 func (l *locker) exists(ctx context.Context, res, id string) bool {
@@ -552,7 +538,7 @@ func (l *locker) exists(ctx context.Context, res, id string) bool {
 		// hold release mutex as well
 		select {
 		case <-l.releaseMuCh:
-			l.log.Debug("acquiring rlock and release mutexes")
+			l.log.Debug("acquiring exists and release mutexes")
 		case <-ctx.Done():
 			l.log.Warn("timeout exceeded, failed to acquire release lock")
 			// we should return previously acquired lock mutex
@@ -560,19 +546,42 @@ func (l *locker) exists(ctx context.Context, res, id string) bool {
 			return false
 		}
 	case <-ctx.Done():
-		l.log.Warn("timeout exceeded, failed to acquire an exist operation lock")
+		l.log.Warn("timeout exceeded, failed to acquire an 'exist' operation lock")
 		return false
 	}
 
-	if _, ok := l.resources[res]; !ok {
-		l.log.Warn("no such resource", zap.String("resource", res), zap.String("id", id))
-		return false
-	}
+	defer func() {
+		select {
+		case l.muCh <- struct{}{}:
+			l.log.Debug("muCh lock returned")
+		default:
+			l.log.Debug("muCh lock not returnen, channel is full")
+			break
+		}
+		select {
+		case l.releaseMuCh <- struct{}{}:
+			l.log.Debug("releaseMuCh lock returned")
+		default:
+			l.log.Debug("releaseMuCh lock not returned, channel is full")
+			break
+		}
+	}()
 
-	if _, ok := l.resources[res].locks[id]; !ok {
-		l.log.Warn("no such resource ID", zap.String("resource", res), zap.String("id", id))
-		return false
-	}
+	// if _, ok := l.resources[res]; !ok {
+	// 	l.log.Warn("no such resource", zap.String("resource", res), zap.String("id", id))
+	//
+	// 	return false
+	// }
+	//
+	// r := l.resources[res]
+	// r.mu.Lock()
+	//
+	// if _, ok := r.locks[id]; !ok {
+	// 	l.log.Warn("no such resource ID", zap.String("resource", res), zap.String("id", id))
+	//
+	// 	r.mu.Unlock()
+	// 	return false
+	// }
 
 	return true
 }
@@ -592,35 +601,48 @@ func (l *locker) updateTTL(ctx context.Context, res, id string, ttl int) bool {
 		}
 	case <-ctx.Done():
 		l.log.Warn("timeout exceeded, failed to acquire updateTTL lock")
-		l.muCh <- struct{}{}
-		l.releaseMuCh <- struct{}{}
 		return false
 	}
+	defer func() {
+		select {
+		case l.muCh <- struct{}{}:
+			l.log.Debug("muCh lock returned")
+		default:
+			l.log.Debug("muCh lock not returnen, channel is full")
+			break
+		}
+		select {
+		case l.releaseMuCh <- struct{}{}:
+			l.log.Debug("releaseMuCh lock returned")
+		default:
+			l.log.Debug("releaseMuCh lock not returned, channel is full")
+			break
+		}
+	}()
 
-	if _, ok := l.resources[res]; !ok {
-		l.log.Warn("no such resource", zap.String("resource", res), zap.String("id", id))
-		l.muCh <- struct{}{}
-		l.releaseMuCh <- struct{}{}
-		return false
-	}
+	l.log.Debug("updateTTL started", zap.String("resource", res), zap.String("id", id))
 
-	if _, ok := l.resources[res].locks[id]; !ok {
-		l.log.Warn("no such resource ID", zap.String("resource", res), zap.String("id", id))
-		l.muCh <- struct{}{}
-		l.releaseMuCh <- struct{}{}
-		return false
-	}
+	// if _, ok := l.resources[res]; !ok {
+	// 	l.log.Warn("no such resource", zap.String("resource", res), zap.String("id", id))
+	// 	return false
+	// }
+	//
+	// if _, ok := l.resources[res].locks[id]; !ok {
+	// 	l.log.Warn("no such resource ID", zap.String("resource", res), zap.String("id", id))
+	// 	return false
+	// }
+	//
+	// r := l.resources[res]
+	// // send update with new TTL
+	// r.mu.Lock()
+	// select {
+	// case r.locks[id].updateTTLCh <- ttl:
+	// 	l.log.Debug("lock/rlocl TTL was successfully updated")
+	// default:
+	// 	l.log.Error("failed to send notification about TTL update", zap.String("id", id), zap.String("resource", res))
+	// }
+	// r.mu.Unlock()
 
-	r := l.resources[res]
-	r.mu.Lock()
-
-	// send update with new TTL
-	r.locks[id].updateTTLCh <- ttl
-	r.mu.Unlock()
-	l.log.Debug("lock/rlocl TTL was successfully updated")
-
-	l.muCh <- struct{}{}
-	l.releaseMuCh <- struct{}{}
 	return true
 }
 
@@ -630,13 +652,12 @@ func (l *locker) makeLockCallback(res, id string, ttl int, r *resource) (callbac
 
 	// at this point, when adding lock, we should not have the callback
 	return func(lockID string, notifCh chan<- struct{}, sCh <-chan struct{}) {
-		// case for the items without TTL
+		// case for the items without TTL. We should add such items to control their flow
 		if ttl == 0 {
 			ttl = 31555952000000 // year
 		}
-		// channel to forcibly remove the lock
+		// TTL channel
 		ta := time.NewTicker(time.Microsecond * time.Duration(ttl))
-		// save the stop channel
 	loop:
 		select {
 		case <-ta.C:
@@ -665,17 +686,11 @@ func (l *locker) makeLockCallback(res, id string, ttl int, r *resource) (callbac
 			break loop
 		}
 
-		r.mu.Lock()
-		delete(r.locks, id)
-		// we also have to check readers and writers to send notification
-		if r.writerCount.Load() == 1 || r.readerCount.Load() == 1 {
-			// only one resource, remove it
-			// and send notification to the notification channel
-			l.log.Debug("deleting the last lock, sending notification", zap.String("id", id))
-			l.log.Debug("current map data", zap.Any("data", r.locks))
-			notifCh <- struct{}{}
-		}
-
+		// r.mu.Lock()
+		r.locks.Delete(id)
+		// l.log.Debug("locks map", zap.Int("len", len(r.locks)), zap.String("deleted id", id), zap.Any("data", r.locks))
+		// r.mu.Unlock()
+		// since r.writer/reader operations are atomic, we perform a bunch of them here which. This bunch of checks is not atomic itself
 		if r.writerCount.Load() == 1 {
 			r.writerCount.Store(0)
 			r.readerCount.Store(0)
@@ -685,13 +700,27 @@ func (l *locker) makeLockCallback(res, id string, ttl int, r *resource) (callbac
 			// reduce number of readers
 			r.readerCount.Add(^uint64(0))
 		}
-		r.mu.Unlock()
+
+		l.log.Debug("current writers and readers count", zap.Uint64("writers", r.writerCount.Load()), zap.Uint64("readers", r.readerCount.Load()))
+		// we also have to check readers and writers to send notification
+		if r.writerCount.Load() == 0 && r.readerCount.Load() == 0 {
+			// only one resource, remove it
+			// and send notification to the notification channel
+			select {
+			case notifCh <- struct{}{}:
+				l.log.Debug("deleting the last lock, sending notification", zap.String("id", id), zap.Any("locks data", r.locks))
+			default:
+				break
+			}
+		}
 	}, stopCbCh, updateTTLCh
 }
 
 func (l *locker) stop(ctx context.Context) {
+	l.log.Debug("received stop signal, acquiring lock/release mutexes")
 	select {
 	case <-l.muCh:
+		l.log.Debug("get muCh mutex")
 		// hold release mutex as well
 		select {
 		case <-l.releaseMuCh:
@@ -703,23 +732,29 @@ func (l *locker) stop(ctx context.Context) {
 			return
 		}
 	case <-ctx.Done():
-		l.log.Warn("timeout exceeded, failed to acquire updateTTL lock")
-		l.muCh <- struct{}{}
-		l.releaseMuCh <- struct{}{}
+		l.log.Warn("timeout exceeded, failed to acquire stop lock")
 		return
 	}
 
+	l.log.Debug("acquired stop mutex")
+
 	// release all mutexes
-	for _, v := range l.resources {
-		v.mu.Lock()
-		for _, vv := range v.locks {
-			select {
-			case vv.stopCh <- struct{}{}:
-			default:
-				break
-			}
-		}
-		v.mu.Unlock()
+	// for _, v := range l.resources {
+	// 	close(v.stopCh)
+	// }
+
+	select {
+	case l.muCh <- struct{}{}:
+		l.log.Debug("muCh lock returned")
+	default:
+		l.log.Debug("muCh lock not returnen, channel is full")
 	}
+	select {
+	case l.releaseMuCh <- struct{}{}:
+		l.log.Debug("releaseMuCh lock returned")
+	default:
+		l.log.Debug("releaseMuCh lock not returned, channel is full")
+	}
+
 	l.log.Debug("signal sent to all resources")
 }
