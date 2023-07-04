@@ -635,7 +635,8 @@ func (l *locker) makeLockCallback(res, id string, ttl int, r *resource) (callbac
 				zap.String("id", id),
 				zap.Int("new_ttl_microsec", newTTL))
 			ta.Reset(time.Microsecond * time.Duration(newTTL))
-			break loop
+			// in case of TTL we don't need to remove the item, only update TTL
+			goto loop
 		}
 
 		// we need to protect bunch of the atomic operations here per-resource
