@@ -536,27 +536,27 @@ func (l *locker) makeLockCallback(res, id string, ttl int, r *resource) (callbac
 	loop:
 		select {
 		case <-ta.C:
-			l.log.Debug("lock: ttl expired",
+			l.log.Debug("r/lock: ttl expired",
 				zap.String("id", lockID),
 				zap.Int("ttl microseconds", ttl),
 			)
 			ta.Stop()
 			// broadcast stop channel
 		case <-sCh:
-			l.log.Debug("lock: ttl removed, broadcast call",
+			l.log.Debug("r/lock: ttl removed, broadcast call",
 				zap.String("id", lockID),
 				zap.Int("ttl microseconds", ttl),
 			)
 			ta.Stop()
 			// item stop channel
 		case <-stopCbCh:
-			l.log.Debug("lock: ttl removed, callback call",
+			l.log.Debug("r/lock: ttl removed, callback call",
 				zap.String("id", lockID),
 				zap.Int("ttl microseconds", ttl),
 			)
 			ta.Stop()
 		case newTTL := <-updateTTLCh:
-			l.log.Debug("updating lock ttl", zap.String("id", id), zap.String("res", res), zap.Int("new_ttl_microsec", newTTL))
+			l.log.Debug("updating r/lock ttl", zap.String("id", id), zap.String("res", res), zap.Int("new_ttl_microsec", newTTL))
 			ta.Reset(time.Microsecond * time.Duration(newTTL))
 			break loop
 		}
@@ -573,14 +573,14 @@ func (l *locker) makeLockCallback(res, id string, ttl int, r *resource) (callbac
 			r.readerCount.Add(^uint64(0))
 		}
 
-		l.log.Debug("current writers and readers count", zap.Uint64("writers", r.writerCount.Load()), zap.Uint64("readers", r.readerCount.Load()), zap.String("deleted id", id))
+		l.log.Debug("current writers and readers count", zap.Uint64("writers", r.writerCount.Load()), zap.Uint64("readers", r.readerCount.Load()), zap.String("resource", res), zap.String("deleted id", id))
 		// we also have to check readers and writers to send notification
 		if r.writerCount.Load() == 0 && r.readerCount.Load() == 0 {
 			// only one resource, remove it
 			// and send notification to the notification channel
 			select {
 			case notifCh <- struct{}{}:
-				l.log.Debug("deleting the last lock, sending notification", zap.String("id", id))
+				l.log.Debug("deleting the last lock, sending notification", zap.String("resource", res), zap.String("id", id))
 			default:
 				break
 			}
