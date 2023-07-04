@@ -82,8 +82,6 @@ Here may have the following scenarios:
 */
 func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 	// only 1 goroutine might be passed here at the time
-	// lock with timeout
-	// todo(rustatian): move to a function
 	if !l.internalLock(ctx, id, res) {
 		return false
 	}
@@ -184,7 +182,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 
 			return true
 		case <-ctx.Done():
-			l.log.Debug("lock notification wait timeout expired", zap.String("id", id))
+			l.log.Warn("lock notification wait timeout expired", zap.String("id", id))
 			return false
 		}
 
