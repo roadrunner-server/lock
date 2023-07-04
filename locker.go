@@ -27,6 +27,7 @@ type item struct {
 type resource struct {
 	// mutex is responsible for the locks, callback safety
 	// mutex is allocated per-resource
+	mu sync.Mutex
 	// lock is the exclusive lock (should be 1 or 0)
 	writerCount atomic.Uint64
 	// readerCount is the number of readers (writers must be 0)
@@ -99,7 +100,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		)
 
 		r := &resource{
-			// mu:             sync.Mutex{},
+			mu:             sync.Mutex{},
 			notificationCh: make(chan struct{}, 1),
 			stopCh:         make(chan struct{}, 1),
 			locks:          sync.Map{},
@@ -321,6 +322,7 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 		)
 
 		r := &resource{
+			mu:             sync.Mutex{},
 			notificationCh: make(chan struct{}, 1),
 			stopCh:         make(chan struct{}, 1),
 			locks:          sync.Map{},
@@ -625,6 +627,10 @@ func (l *locker) makeLockCallback(res, id string, ttl int, r *resource) (callbac
 			ta.Reset(time.Microsecond * time.Duration(newTTL))
 			break loop
 		}
+
+		// we need to protect bunch of the atomic operations here per-resource
+		r.mu.Lock()
+		defer r.mu.Unlock()
 
 		r.locks.Delete(id)
 
