@@ -1,7 +1,7 @@
 package lock
 
 import (
-	"sync"
+	"context"
 
 	"go.uber.org/zap"
 )
@@ -28,13 +28,13 @@ func (p *Plugin) Serve() chan error {
 	return make(chan error, 1)
 }
 
-func (p *Plugin) Stop() error {
-	p.locks.stop()
+func (p *Plugin) Stop(ctx context.Context) error {
+	p.locks.stop(ctx)
 	return nil
 }
 
 func (p *Plugin) Weight() uint {
-	return 80
+	return 100
 }
 
 func (p *Plugin) Name() string {
@@ -44,7 +44,6 @@ func (p *Plugin) Name() string {
 func (p *Plugin) RPC() any {
 	return &rpc{
 		log: p.log,
-		mu:  sync.Mutex{},
 		pl:  p,
 	}
 }

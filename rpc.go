@@ -2,7 +2,7 @@ package lock
 
 import (
 	"context"
-	"sync"
+	"errors"
 	"time"
 
 	lockApi "go.buf.build/protocolbuffers/go/roadrunner-server/api/lock/v1beta1"
@@ -11,152 +11,102 @@ import (
 
 type rpc struct {
 	log *zap.Logger
-	mu  sync.Mutex
 	pl  *Plugin
 }
 
 func (r *rpc) Lock(req *lockApi.Request, resp *lockApi.Response) error {
-	// fast-path, when wait is eq to 0
-	r.log.Debug("lock request received", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-	if req.GetWait() == 0 {
-		// locker
-		acq := r.pl.locks.lock(req.GetResource(), req.GetId(), int(req.GetTtl()))
-		if acq {
-			r.log.Debug("lock successfully acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-			resp.Ok = true
-			return nil
-		}
+	r.log.Debug("lock request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
 
-		r.log.Debug("failed to acquire lock, already acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-		resp.Ok = false
-		return nil
+	if req.GetId() == "" {
+		return errors.New("empty ID is not allowed")
 	}
 
-	acq := r.pl.locks.lock(req.GetResource(), req.GetId(), int(req.GetTtl()))
+	var ctx context.Context
+	var cancel context.CancelFunc
+
+	switch req.GetWait() {
+	case int64(0):
+		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond*100)
+		defer cancel()
+	default:
+		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
+		defer cancel()
+	}
+
+	acq := r.pl.locks.lock(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
 	if acq {
-		r.log.Debug("lock successfully acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
 		resp.Ok = true
 		return nil
 	}
 
-	r.log.Debug("acquire attempt failed, retrying in 1s", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-
-	timer := time.NewTicker(time.Second)
-	defer timer.Stop()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(req.GetWait()))
-	defer cancel()
-
-	r.log.Debug("waiting for the lock to acquire", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-	stopCh := make(chan bool, 1)
-
-	go func() {
-		for {
-			select {
-			// try
-			case <-timer.C:
-				if !r.pl.locks.lock(req.GetResource(), req.GetId(), int(req.GetTtl())) {
-					r.log.Debug("acquire attempt failed, retrying in 1s", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-					continue
-				}
-
-				r.log.Debug("lock successfully acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-				stopCh <- true
-				return
-
-			case <-ctx.Done():
-				// wait exceeded, send false
-				r.log.Debug("failed to acquire lock, wait timeout exceeded", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-				stopCh <- false
-				return
-			}
-		}
-	}()
-
-	res := <-stopCh
-	resp.Ok = res
-
+	resp.Ok = false
 	return nil
 }
 
 func (r *rpc) LockRead(req *lockApi.Request, resp *lockApi.Response) error {
-	// fast-path, when wait is eq to 0
-	r.log.Debug("lock request received", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-	if req.GetWait() == 0 {
-		// locker
-		acq := r.pl.locks.lockRead(req.GetResource(), req.GetId(), int(req.GetTtl()))
-		if acq {
-			r.log.Debug("lock successfully acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-			resp.Ok = true
-			return nil
-		}
+	r.log.Debug("read lock request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
 
-		r.log.Debug("failed to acquire lock, already acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-		resp.Ok = false
-		return nil
+	if req.GetId() == "" {
+		return errors.New("empty ID is not allowed")
 	}
 
-	if r.pl.locks.lockRead(req.GetResource(), req.GetId(), int(req.GetTtl())) {
-		r.log.Debug("lock successfully acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
+	var ctx context.Context
+	var cancel context.CancelFunc
+
+	switch req.GetWait() {
+	case int64(0):
+		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond*100)
+		defer cancel()
+	default:
+		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
+		defer cancel()
+	}
+
+	acq := r.pl.locks.lockRead(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
+	if acq {
 		resp.Ok = true
 		return nil
 	}
 
-	r.log.Debug("acquire attempt failed, retrying in 1s", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-
-	timer := time.NewTicker(time.Second)
-	defer timer.Stop()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(req.GetWait()))
-	defer cancel()
-
-	r.log.Debug("waiting for the lock to acquire", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-	stopCh := make(chan bool, 1)
-
-	go func() {
-		for {
-			select {
-			// try
-			case <-timer.C:
-				if !r.pl.locks.lockRead(req.GetResource(), req.GetId(), int(req.GetTtl())) {
-					r.log.Debug("acquire attempt failed, retrying in 1s", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-					continue
-				}
-
-				r.log.Debug("lock successfully acquired", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-				stopCh <- true
-				return
-
-			case <-ctx.Done():
-				// wait exceeded, send false
-				r.log.Debug("failed to acquire lock, wait timeout exceeded", zap.String("resource", req.GetResource()), zap.String("ID", req.GetId()))
-				stopCh <- false
-				return
-			}
-		}
-	}()
-
-	res := <-stopCh
-	resp.Ok = res
-
+	resp.Ok = false
 	return nil
 }
 
 func (r *rpc) Release(req *lockApi.Request, resp *lockApi.Response) error {
-	resp.Ok = r.pl.locks.release(req.GetResource(), req.GetId())
+	r.log.Debug("release request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	if req.GetId() == "" {
+		return errors.New("empty ID is not allowed")
+	}
+	resp.Ok = r.pl.locks.release(context.Background(), req.GetResource(), req.GetId())
 	return nil
 }
 
 func (r *rpc) ForceRelease(req *lockApi.Request, resp *lockApi.Response) error {
-	resp.Ok = r.pl.locks.forceRelease(req.GetResource())
+	r.log.Debug("force release request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	if req.GetId() == "" {
+		return errors.New("empty ID is not allowed")
+	}
+	resp.Ok = r.pl.locks.forceRelease(context.Background(), req.GetResource())
 	return nil
 }
 
 func (r *rpc) Exists(req *lockApi.Request, resp *lockApi.Response) error {
-	resp.Ok = r.pl.locks.exists(req.GetResource(), req.GetId())
+	r.log.Debug("'exists' request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	if req.GetId() == "" {
+		return errors.New("empty ID is not allowed")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	resp.Ok = r.pl.locks.exists(ctx, req.GetResource(), req.GetId())
+	cancel()
 	return nil
 }
 func (r *rpc) UpdateTTL(req *lockApi.Request, resp *lockApi.Response) error {
-	resp.Ok = r.pl.locks.updateTTL(req.GetResource(), req.GetId(), int(req.GetTtl()))
+	r.log.Debug("updateTTL request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	if req.GetId() == "" {
+		return errors.New("empty ID is not allowed")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	resp.Ok = r.pl.locks.updateTTL(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
+	cancel()
 	return nil
 }
