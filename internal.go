@@ -36,7 +36,7 @@ func (l *locker) internalLock(ctx context.Context, id string) bool {
 		// hold release mutex as well
 		select {
 		case <-l.releaseMuCh:
-			l.log.Debug("acquired lock and release mutexes", zap.String("id", id))
+			l.log.Debug("acquired muCh and releaseMuCh mutexes", zap.String("id", id))
 		case <-ctx.Done():
 			l.log.Warn("timeout exceeded, failed to acquire releaseMuCh", zap.String("id", id))
 			// we should return previously acquired lock mutex
@@ -44,7 +44,7 @@ func (l *locker) internalLock(ctx context.Context, id string) bool {
 			case l.muCh <- struct{}{}:
 				l.log.Debug("muCh lock returned", zap.String("id", id))
 			default:
-				l.log.Debug("muCh lock not returnen, channel is full", zap.String("id", id))
+				l.log.Debug("muCh lock is not returned, channel is full", zap.String("id", id))
 			}
 
 			return false

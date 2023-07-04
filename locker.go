@@ -136,8 +136,9 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		// here we allowing to release mutexes, because some of them might not have TTL and should be released manually
 		select {
 		case l.releaseMuCh <- struct{}{}:
-			l.log.Debug("release mutex was taken", zap.String("id", id))
+			l.log.Debug("returning releaseMuCh mutex to temporarily allow releasing locks", zap.String("resource", res), zap.String("id", id))
 		default:
+			l.log.DPanic("releaseMuCh is full, skipping releaseMuCh updating", zap.String("resource", res), zap.String("id", id))
 		}
 
 		select {
@@ -332,15 +333,21 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 	// check tricky cases
 	switch {
 	// case when we have write lock
-	case r.writerCount.Load() == 1 && r.readerCount.Load() == 0:
+	case r.writerCount.Load() == 1:
+		if r.readerCount.Load() > 0 {
+			l.log.Error("write<->read lock incosistend state, w==1, r>0", zap.String("id", id))
+			return false
+		}
 		// we have to wait here
 		l.log.Debug("waiting to acquire the lock, w==1, r==0", zap.String("resource", res), zap.String("id", id))
 		// allow to release mutexes
 		select {
 		case l.releaseMuCh <- struct{}{}:
-			l.log.Debug("release mutex was taken", zap.String("id", id))
+			l.log.Debug("returning releaseMuCh mutex to temporarily allow releasing locks", zap.String("id", id))
 		default:
+			l.log.DPanic("releaseMuCh is full, skipping releaseMuCh updating", zap.String("resource", res), zap.String("id", id))
 		}
+
 		select {
 		case <-r.notificationCh:
 			// get release mutex back
