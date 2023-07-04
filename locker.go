@@ -84,11 +84,11 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 	// only 1 goroutine might be passed here at the time
 	// lock with timeout
 	// todo(rustatian): move to a function
-	if !l.internalLock(ctx, id) {
+	if !l.internalLock(ctx, id, res) {
 		return false
 	}
 
-	defer l.internalUnLock(id)
+	defer l.internalUnLock(id, res)
 
 	// if there is no lock for the provided resource -> create it
 	// assume that this is the first call to the lock with this resource and hash
@@ -188,10 +188,10 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			return false
 		}
 
-	case r.readerCount.Load() > 0 && r.writerCount.Load() == 0:
+	case r.writerCount.Load() == 0 && r.readerCount.Load() > 0:
 		// check if that's possible to elevate read lock permission to write
 		if r.readerCount.Load() == 1 {
-			l.log.Debug("checking readers to elevate rlock permissions", zap.String("id", id))
+			l.log.Debug("checking readers to elevate rlock permissions, w==0, r>0", zap.String("id", id))
 
 			rr, ok := r.locks.Load(id)
 			if ok {
@@ -238,7 +238,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		}
 
 		// at this point we know, that we have more than 1 read lock, so, we can't promote them to lock
-		l.log.Debug("waiting for the readlocks to expire/release",
+		l.log.Debug("waiting for the readlocks to expire/release, w==0, r>0",
 			zap.String("resource", res),
 			zap.String("id", id))
 		select {
@@ -273,6 +273,9 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		}
 
 	case r.readerCount.Load() == 0 && r.writerCount.Load() == 0:
+		l.log.Debug("acquiring lock, w==0, r==0",
+			zap.String("resource", res),
+			zap.String("id", id))
 		// drain notifications channel, just to be sure
 		select {
 		case <-r.notificationCh:
@@ -298,20 +301,25 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		}()
 
 		return true
+	default:
+		l.log.Error("unknown readlock state",
+			zap.Uint64("writers", r.writerCount.Load()),
+			zap.Uint64("readers", r.readerCount.Load()),
+			zap.String("resource", res),
+			zap.String("id", id))
+		return false
 	}
-
-	return false
 }
 
 func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 	// only 1 goroutine might be passed here at the time
 	// lock with timeout
 	// todo(rustatian): move to a function
-	if !l.internalLock(ctx, id) {
+	if !l.internalLock(ctx, id, res) {
 		return false
 	}
 
-	defer l.internalUnLock(id)
+	defer l.internalUnLock(id, res)
 
 	// check for the first call for this resource
 	if _, ok := l.resources.Load(res); !ok {
@@ -364,7 +372,7 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 			return false
 		}
 		// we have to wait here
-		l.log.Debug("waiting to acquire the lock, w==1, r==0",
+		l.log.Debug("waiting to acquire a lock, w==1, r==0",
 			zap.String("resource", res),
 			zap.String("id", id))
 		// allow to release mutexes
@@ -411,7 +419,7 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 
 			return true
 		case <-ctx.Done():
-			l.log.Warn("failed to acquire the readlock, w==1, r==0",
+			l.log.Warn("failed to acquire a readlock, timeout exceeded, w==1, r==0",
 				zap.String("resource", res),
 				zap.String("id", id))
 			return false
@@ -443,6 +451,8 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 		return true
 	default:
 		l.log.Error("unknown readlock state",
+			zap.Uint64("writers", r.writerCount.Load()),
+			zap.Uint64("readers", r.readerCount.Load()),
 			zap.String("resource", res),
 			zap.String("id", id))
 		return false
@@ -450,10 +460,10 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 }
 
 func (l *locker) release(ctx context.Context, res, id string) bool {
-	if !l.internalReleaseLock(ctx, id) {
+	if !l.internalReleaseLock(ctx, id, res) {
 		return false
 	}
-	defer l.internalReleaseUnLock(id)
+	defer l.internalReleaseUnLock(id, res)
 
 	if _, ok := l.resources.Load(res); !ok {
 		l.log.Warn("no such resource",
@@ -483,11 +493,11 @@ func (l *locker) release(ctx context.Context, res, id string) bool {
 }
 
 func (l *locker) forceRelease(ctx context.Context, res string) bool {
-	if !l.internalReleaseLock(ctx, res) {
+	if !l.internalReleaseLock(ctx, "force-release", res) {
 		return false
 	}
 
-	defer l.internalReleaseUnLock(res)
+	defer l.internalReleaseUnLock("force-release", res)
 
 	l.log.Debug("force release mutex obtained", zap.String("resource", res))
 
@@ -516,10 +526,10 @@ func (l *locker) forceRelease(ctx context.Context, res string) bool {
 }
 
 func (l *locker) exists(ctx context.Context, res, id string) bool {
-	if !l.internalLock(ctx, id) {
+	if !l.internalLock(ctx, id, res) {
 		return false
 	}
-	defer l.internalUnLock(id)
+	defer l.internalUnLock(id, res)
 
 	rr, ok := l.resources.Load(res)
 	if !ok {
@@ -542,10 +552,10 @@ func (l *locker) exists(ctx context.Context, res, id string) bool {
 }
 
 func (l *locker) updateTTL(ctx context.Context, res, id string, ttl int) bool {
-	if !l.internalLock(ctx, id) {
+	if !l.internalLock(ctx, id, res) {
 		return false
 	}
-	defer l.internalUnLock(id)
+	defer l.internalUnLock(id, res)
 
 	l.log.Debug("updateTTL started",
 		zap.String("resource", res),

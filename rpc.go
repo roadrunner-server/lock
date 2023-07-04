@@ -2,6 +2,7 @@ package lock
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	lockApi "go.buf.build/protocolbuffers/go/roadrunner-server/api/lock/v1beta1"
@@ -15,6 +16,10 @@ type rpc struct {
 
 func (r *rpc) Lock(req *lockApi.Request, resp *lockApi.Response) error {
 	r.log.Debug("lock request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+
+	if req.GetId() == "" {
+		return errors.New("empty ID is not allowed")
+	}
 
 	var ctx context.Context
 	var cancel context.CancelFunc
@@ -41,6 +46,10 @@ func (r *rpc) Lock(req *lockApi.Request, resp *lockApi.Response) error {
 func (r *rpc) LockRead(req *lockApi.Request, resp *lockApi.Response) error {
 	r.log.Debug("read lock request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
 
+	if req.GetId() == "" {
+		return errors.New("empty ID is not allowed")
+	}
+
 	var ctx context.Context
 	var cancel context.CancelFunc
 
@@ -65,18 +74,27 @@ func (r *rpc) LockRead(req *lockApi.Request, resp *lockApi.Response) error {
 
 func (r *rpc) Release(req *lockApi.Request, resp *lockApi.Response) error {
 	r.log.Debug("release request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	if req.GetId() == "" {
+		return errors.New("empty ID is not allowed")
+	}
 	resp.Ok = r.pl.locks.release(context.Background(), req.GetResource(), req.GetId())
 	return nil
 }
 
 func (r *rpc) ForceRelease(req *lockApi.Request, resp *lockApi.Response) error {
 	r.log.Debug("force release request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	if req.GetId() == "" {
+		return errors.New("empty ID is not allowed")
+	}
 	resp.Ok = r.pl.locks.forceRelease(context.Background(), req.GetResource())
 	return nil
 }
 
 func (r *rpc) Exists(req *lockApi.Request, resp *lockApi.Response) error {
 	r.log.Debug("'exists' request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	if req.GetId() == "" {
+		return errors.New("empty ID is not allowed")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	resp.Ok = r.pl.locks.exists(ctx, req.GetResource(), req.GetId())
 	cancel()
@@ -84,6 +102,9 @@ func (r *rpc) Exists(req *lockApi.Request, resp *lockApi.Response) error {
 }
 func (r *rpc) UpdateTTL(req *lockApi.Request, resp *lockApi.Response) error {
 	r.log.Debug("updateTTL request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	if req.GetId() == "" {
+		return errors.New("empty ID is not allowed")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	resp.Ok = r.pl.locks.updateTTL(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
 	cancel()
