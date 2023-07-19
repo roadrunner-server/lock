@@ -537,6 +537,11 @@ func (l *locker) exists(ctx context.Context, res, id string) bool {
 		return false
 	}
 
+	// special case, check if we have any locks
+	if id == "*" {
+		return true
+	}
+
 	r := rr.(*resource)
 
 	if _, ok := r.locks.Load(id); !ok {
