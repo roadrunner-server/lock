@@ -541,12 +541,11 @@ func (l *locker) exists(ctx context.Context, res, id string) bool {
 
 	// special case, check if we have any locks
 	if id == "*" {
-		atLeastOne := false
-		r.locks.Range(func(_, _ any) bool {
-			atLeastOne = true
-			return false
-		})
-		return atLeastOne
+		if r.writerCount.Load() > 0 || r.readerCount.Load() > 0 {
+			return true
+		}
+
+		return false
 	}
 
 	if _, ok := r.locks.Load(id); !ok {
