@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	go.buf.build/protocolbuffers/go/roadrunner-server/api v1.3.40
-	go.uber.org/zap v1.24.0
+	go.uber.org/zap v1.25.0
 )
 
 require (
