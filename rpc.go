@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	lockApi "go.buf.build/protocolbuffers/go/roadrunner-server/api/lock/v1beta1"
+	lockApi "github.com/roadrunner-server/api/v4/build/lock/v1beta1"
 	"go.uber.org/zap"
 )
 
