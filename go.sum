@@ -10,6 +10,8 @@ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZb
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/roadrunner-server/api/v4 v4.6.2 h1:BsbVb7Y0Dsz1/6GMja/yVcOAbozHbYQ3i24DTLh7geI=
 github.com/roadrunner-server/api/v4 v4.6.2/go.mod h1:7RPouCwEAZSfWKU5eAf5Bc6snFw97RvfWk1Mz+kaKLQ=
+github.com/roadrunner-server/api/v4 v4.7.0 h1:vZ8gYWjEpJOa8slUqPJJKENS4vrFKhvI9+nQKDtSqHU=
+github.com/roadrunner-server/api/v4 v4.7.0/go.mod h1:Ut9T2j3E22cnRJtipbU8N3WVhyV040iiDfddzojlKwY=
 github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcUk=
 github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
 go.uber.org/goleak v1.2.0 h1:xqgm/S+aQvhWFTtR0XK3Jvg7z8kGV8P4X14IzwN3Eqk=
