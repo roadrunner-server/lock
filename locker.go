@@ -143,7 +143,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 				zap.String("resource", res),
 				zap.String("id", id))
 		default:
-			l.log.DPanic("releaseMuCh is full, skipping releaseMuCh updating",
+			l.log.Debug("releaseMuCh is full, skipping releaseMuCh updating",
 				zap.String("resource", res),
 				zap.String("id", id))
 		}
@@ -380,7 +380,7 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 				zap.String("resource", res),
 				zap.String("id", id))
 		default:
-			l.log.DPanic("releaseMuCh is full, skipping releaseMuCh updating",
+			l.log.Debug("releaseMuCh is full, skipping releaseMuCh updating",
 				zap.String("resource", res),
 				zap.String("id", id))
 		}
