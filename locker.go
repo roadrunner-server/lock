@@ -50,7 +50,7 @@ type resource struct {
 
 type locker struct {
 	// global mutex for the resources
-	globalMu sync.RWMutex
+	globalMu *reslock
 	// logger
 	log *zap.Logger
 	// mutex with timeout based on channel
@@ -65,6 +65,7 @@ type locker struct {
 func newLocker(log *zap.Logger) *locker {
 	l := &locker{
 		log:         log,
+		globalMu:    newResLock(),
 		muCh:        make(chan struct{}, 1),
 		releaseMuCh: make(chan struct{}, 1),
 		resources:   sync.Map{}, // make(map[string]*resource, 5),
@@ -87,7 +88,15 @@ Here may have the following scenarios:
 func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 	// first - check if the resource exists
 	// check if we have the resource
-	l.globalMu.Lock()
+	obt := l.globalMu.lock(ctx)
+	if !obt {
+		l.log.Debug("failed to acquire a global lock",
+			zap.String("resource", res),
+			zap.String("id", id),
+		)
+		return false
+	}
+
 	_, ok := l.resources.Load(res)
 	if !ok {
 		// write operation
@@ -126,17 +135,17 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			callb(id, r.notificationCh, r.stopCh)
 		}()
 
-		l.globalMu.Unlock()
+		l.globalMu.unlock()
 		return true
 	}
 
 	// only 1 goroutine might be passed here at the time, and we know that resource exists
-	ok, _, releaseMuCh := l.resourceLock(ctx, id, res)
-	if !ok {
-		return false
-	}
-
-	defer l.resourceUnLock(id, res)
+	//ok, _, releaseMuCh := l.resourceLock(ctx, id, res)
+	//if !ok {
+	//	return false
+	//}
+	//
+	//defer l.resourceUnLock(id, res)
 
 	// if there is no lock for the provided resource -> create it
 	// assume that this is the first call to the lock with this resource and hash
@@ -147,11 +156,20 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 
 	// get resource
 	// at this point both, lock and release lock should be acquired
+
 	rr, _ := l.resources.Load(res)
 	r := rr.(*resource)
-
-	// lock the mutex
+	// lock the resource
 	r.cond.L.Lock()
+	defer r.cond.L.Unlock()
+
+	// if the context is done - we need to unlock the resource
+	go func() {
+		select {
+		case <-ctx.Done():
+			r.cond.Broadcast()
+		}
+	}()
 
 	// we don't have any lock associated with this resource
 	switch {
@@ -163,8 +181,10 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			r.cond.Wait()
 			select {
 			case <-ctx.Done():
-				// failed to obtain a lock
-				return false
+				// resource is not locked anymore
+				if r.readerCount.Load() == 0 && r.writerCount.Load() > 0 {
+					return false
+				}
 			default:
 			}
 
@@ -172,54 +192,54 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		}
 
 		// here we're allowing to release mutexes, because some of them might not have TTL and should be released manually
-		select {
-		case releaseMuCh <- struct{}{}:
-			l.log.Debug("returning releaseMuCh mutex to temporarily allow releasing locks",
+		//select {
+		//case releaseMuCh <- struct{}{}:
+		//	l.log.Debug("returning releaseMuCh mutex to temporarily allow releasing locks",
+		//		zap.String("resource", res),
+		//		zap.String("id", id))
+		//default:
+		//	l.log.Debug("releaseMuCh is full, skipping releaseMuCh updating",
+		//		zap.String("resource", res),
+		//		zap.String("id", id))
+		//}
+
+		// inconsistent, still have readers/writers after notification
+		if r.writerCount.Load() != 0 && r.readerCount.Load() != 0 {
+			l.log.Error("inconsistent state, should be zero writers and zero readers",
 				zap.String("resource", res),
-				zap.String("id", id))
-		default:
-			l.log.Debug("releaseMuCh is full, skipping releaseMuCh updating",
-				zap.String("resource", res),
-				zap.String("id", id))
-		}
-
-		select {
-		case <-r.notificationCh:
-			l.log.Debug("all writers was removed, received notification", zap.String("id", id))
-			// get release mutex back
-			<-releaseMuCh
-			l.log.Debug("got release mutex back", zap.String("id", id))
-
-			// inconsistent, still have readers/writers after notification
-			if r.writerCount.Load() != 0 && r.readerCount.Load() != 0 {
-				l.log.Error("inconsistent state, should be zero writers and zero readers",
-					zap.String("resource", res),
-					zap.String("id", id),
-					zap.Uint64("writers", r.writerCount.Load()),
-					zap.Uint64("readers", r.readerCount.Load()))
-				return false
-			}
-
-			r.writerCount.Store(1)
-			r.readerCount.Store(0)
-
-			callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl)
-
-			r.locks.Store(id, &item{
-				callback:    callb,
-				stopCh:      stopCbCh,
-				updateTTLCh: updateTTLCh,
-			})
-			// run the callback
-			go func() {
-				callb(id, r.notificationCh, r.stopCh)
-			}()
-
-			return true
-		case <-ctx.Done():
-			l.log.Warn("lock notification wait timeout expired", zap.String("id", id))
+				zap.String("id", id),
+				zap.Uint64("writers", r.writerCount.Load()),
+				zap.Uint64("readers", r.readerCount.Load()))
 			return false
 		}
+
+		r.writerCount.Store(1)
+		r.readerCount.Store(0)
+
+		callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl)
+
+		r.locks.Store(id, &item{
+			callback:    callb,
+			stopCh:      stopCbCh,
+			updateTTLCh: updateTTLCh,
+		})
+		// run the callback
+		go func() {
+			callb(id, r.notificationCh, r.stopCh)
+		}()
+		//select {
+		//case <-r.notificationCh:
+		//	l.log.Debug("all writers was removed, received notification", zap.String("id", id))
+		//	// get release mutex back
+		//	<-releaseMuCh
+		//	l.log.Debug("got release mutex back", zap.String("id", id))
+		//
+		//
+		//	return true
+		//case <-ctx.Done():
+		//	l.log.Warn("lock notification wait timeout expired", zap.String("id", id))
+		//	return false
+		//}
 
 	case r.writerCount.Load() == 0 && r.readerCount.Load() > 0:
 		// check if that's possible to elevate read lock permission to write
@@ -239,6 +259,20 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 				l.log.Debug("found read lock which can be promoted to write lock", zap.String("id", id))
 				// send stop signal to the particular lock
 				close(rrr.(*item).stopCh)
+			}
+
+			for r.writerCount.Load() == 0 && r.readerCount.Load() > 0 {
+				r.cond.Wait()
+				select {
+				case <-ctx.Done():
+					// resource is still locked
+					if r.readerCount.Load() == 0 && r.writerCount.Load() > 0 {
+						return false
+					}
+				default:
+				}
+
+				time.Sleep(time.Millisecond * 100)
 			}
 
 			// wait for the notification
@@ -366,10 +400,21 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			zap.String("id", id))
 		return false
 	}
+
+	return false
 }
 
 func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 	// write operation
+	if !l.globalMu.lock(ctx) {
+		l.log.Debug("failed to acquire a global lock for release",
+			zap.String("resource", res),
+			zap.String("id", id),
+		)
+
+		return false
+	}
+
 	_, ok := l.resources.Load(res)
 	if !ok {
 		// write operation
@@ -379,7 +424,6 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 			zap.Int("ttl microseconds", ttl),
 		)
 
-		l.globalMu.Lock()
 		r := &resource{
 			ownerId:        id,
 			locks:          sync.Map{},
@@ -406,27 +450,45 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 			callb(id, r.notificationCh, r.stopCh)
 		}()
 
-		l.globalMu.Unlock()
+		l.globalMu.unlock()
 		return true
 	}
 
 	// only 1 goroutine might be passed here at the time, and we know that resource exists
-	ok, _, releaseMuCh := l.resourceLock(ctx, id, res)
-	if !ok {
-		return false
-	}
-
-	defer l.resourceUnLock(id, res)
-
 	rr, _ := l.resources.Load(res)
 	r := rr.(*resource)
+
+	// lock the resource
+	r.cond.L.Lock()
+	defer r.cond.L.Unlock()
+
+	// if the context is done - we need to unlock the resource
+	go func() {
+		select {
+		case <-ctx.Done():
+			r.cond.Broadcast()
+		}
+	}()
+
+	//if !r.lock.lock(ctx) {
+	//	l.log.Debug("failed to acquire a lockRead resource lock",
+	//		zap.String("resource", res),
+	//		zap.String("id", id),
+	//	)
+	//
+	//	l.globalMu.unlock()
+	//	return false
+	//}
+	//l.globalMu.unlock()
+	//
+	//defer r.lock.unlock()
 
 	// check tricky cases
 	switch {
 	// case when we have write lock
 	case r.writerCount.Load() == 1:
 		if r.readerCount.Load() > 0 {
-			l.log.Error("write<->read lock incosistend state, w==1, r>0",
+			l.log.Error("write<->read lock inconsistent state, w==1, r>0",
 				zap.String("resource", res),
 				zap.String("id", id))
 			return false
@@ -437,7 +499,7 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 			zap.String("id", id))
 		// allow to release mutexes
 		select {
-		case releaseMuCh <- struct{}{}:
+		case l.releaseMuCh <- struct{}{}:
 			l.log.Debug("returning releaseMuCh mutex to temporarily allow releasing locks",
 				zap.String("resource", res),
 				zap.String("id", id))
@@ -450,7 +512,7 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 		select {
 		case <-r.notificationCh:
 			// get release mutex back
-			<-releaseMuCh
+			<-l.releaseMuCh
 			// inconsistent, still have readers/writers after notification
 			if r.writerCount.Load() != 0 && r.readerCount.Load() != 0 {
 				l.log.Error("inconsistent state, should be zero writers and zero readers",
@@ -521,7 +583,14 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 
 func (l *locker) release(ctx context.Context, res, id string) bool {
 	// write operation
-	l.globalMu.RLock()
+	if !l.globalMu.lock(ctx) {
+		l.log.Debug("failed to acquire a global lock for release",
+			zap.String("resource", res),
+			zap.String("id", id),
+		)
+
+		return false
+	}
 	// check if we have the resource
 	rr, ok := l.resources.Load(res)
 	if !ok {
@@ -529,7 +598,7 @@ func (l *locker) release(ctx context.Context, res, id string) bool {
 			zap.String("resource", res),
 			zap.String("id", id),
 		)
-		l.globalMu.RUnlock()
+		l.globalMu.unlock()
 		return true
 	}
 
@@ -539,17 +608,20 @@ func (l *locker) release(ctx context.Context, res, id string) bool {
 	//defer l.internalReleaseUnLock(id, res)
 
 	r := rr.(*resource)
+	r.cond.L.Lock()
+	defer r.cond.L.Unlock()
+
 	// get the resource lock
-	rlok := r.lock.lock(ctx)
-	if !rlok {
-		l.log.Warn("failed to acquire a resource lock",
-			zap.String("resource", res),
-			zap.String("id", id),
-		)
-		return false
-	}
-	l.globalMu.RUnlock()
-	defer r.lock.unlock()
+	//rlok := r.lock.lock(ctx)
+	//if !rlok {
+	//	l.log.Warn("failed to acquire a resource lock",
+	//		zap.String("resource", res),
+	//		zap.String("id", id),
+	//	)
+	//	return false
+	//}
+	//l.globalMu.RUnlock()
+	//defer r.lock.unlock()
 
 	// leave the global lock for the resource
 
@@ -558,6 +630,7 @@ func (l *locker) release(ctx context.Context, res, id string) bool {
 			zap.String("resource", res),
 			zap.String("id", id),
 		)
+
 		return false
 	}
 
@@ -566,6 +639,7 @@ func (l *locker) release(ctx context.Context, res, id string) bool {
 		l.log.Warn("no such lock ID",
 			zap.String("resource", res),
 			zap.String("id", id))
+
 		return false
 	}
 
@@ -575,15 +649,16 @@ func (l *locker) release(ctx context.Context, res, id string) bool {
 	l.log.Debug("lock successfully released",
 		zap.String("resource", res),
 		zap.String("id", id))
+
 	return true
 }
 
 func (l *locker) forceRelease(ctx context.Context, res string) bool {
-	if !l.internalReleaseLock(ctx, "force-release", res) {
-		return false
-	}
-
-	defer l.internalReleaseUnLock("force-release", res)
+	//if !l.internalReleaseLock(ctx, "force-release", res) {
+	//	return false
+	//}
+	//
+	//defer l.internalReleaseUnLock("force-release", res)
 
 	l.log.Debug("force release mutex obtained", zap.String("resource", res))
 
@@ -613,26 +688,15 @@ func (l *locker) forceRelease(ctx context.Context, res string) bool {
 
 func (l *locker) exists(ctx context.Context, res, id string) bool {
 	// write operation
-	l.globalMu.Lock()
-	// check if we have the resource
-	_, ok := l.resources.Load(res)
-	if !ok {
-		l.log.Debug("no such resource",
+	if !l.globalMu.lock(ctx) {
+		l.log.Debug("failed to acquire a global lock for release",
 			zap.String("resource", res),
-			zap.String("id", id))
-		l.globalMu.Unlock()
+			zap.String("id", id),
+		)
 		return false
 	}
 
-	l.globalMu.Unlock()
-
-	// only 1 goroutine might be passed here at the time, and we know that resource exists
-	ok, _, _ = l.resourceLock(ctx, id, res)
-	if !ok {
-		return false
-	}
-
-	defer l.resourceUnLock(id, res)
+	defer l.globalMu.unlock()
 
 	rr, ok := l.resources.Load(res)
 	if !ok {
@@ -653,7 +717,7 @@ func (l *locker) exists(ctx context.Context, res, id string) bool {
 		return false
 	}
 
-	if _, ok := r.locks.Load(id); !ok {
+	if _, existsId := r.locks.Load(id); !existsId {
 		l.log.Warn("no such lock ID",
 			zap.String("resource", res),
 			zap.String("id", id))
@@ -665,26 +729,23 @@ func (l *locker) exists(ctx context.Context, res, id string) bool {
 
 func (l *locker) updateTTL(ctx context.Context, res, id string, ttl int) bool {
 	// write operation
-	l.globalMu.Lock()
+	if !l.globalMu.lock(ctx) {
+		l.log.Debug("failed to acquire a global lock for release",
+			zap.String("resource", res),
+			zap.String("id", id),
+		)
+		return false
+	}
+
 	// check if we have the resource
 	_, ok := l.resources.Load(res)
 	if !ok {
 		l.log.Warn("no such resource",
 			zap.String("resource", res),
 			zap.String("id", id))
-		l.globalMu.Unlock()
+		l.globalMu.unlock()
 		return false
 	}
-
-	l.globalMu.Unlock()
-
-	// only 1 goroutine might be passed here at the time, and we know that resource exists
-	ok, _, _ = l.resourceLock(ctx, id, res)
-	if !ok {
-		return false
-	}
-
-	defer l.resourceUnLock(id, res)
 
 	l.log.Debug("updateTTL started",
 		zap.String("resource", res),
@@ -696,10 +757,16 @@ func (l *locker) updateTTL(ctx context.Context, res, id string, ttl int) bool {
 		l.log.Warn("no such resource",
 			zap.String("resource", res),
 			zap.String("id", id))
+
+		l.globalMu.unlock()
 		return false
 	}
 
 	rr := r.(*resource)
+	rr.cond.L.Lock()
+	l.globalMu.unlock()
+
+	defer rr.cond.L.Unlock()
 
 	if rr.ownerId != id {
 		l.log.Debug("updateTTL called for the resource which is not owned by the caller",
@@ -779,26 +846,27 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 			goto loop
 		}
 
+		// remove the item
 		// we need to protect bunch of the atomic operations here per-resource
-		l.globalMu.Lock()
-		defer l.globalMu.Unlock()
-
 		rr, ok := l.resources.Load(res)
 		if !ok {
-			panic("no such resource")
+			l.log.Warn("no such resource, TTL expired",
+				zap.String("resource", res),
+				zap.String("id", id))
+			return
 		}
 
 		r := rr.(*resource)
-		r.mu.Lock()
-		defer r.mu.Unlock()
+		r.cond.L.Lock()
+		defer r.cond.L.Unlock()
 
 		r.locks.Delete(id)
 
 		if r.writerCount.Load() == 1 {
-			r.writerCount.Store(0)
-			r.readerCount.Store(0)
 			// clear owner
 			r.ownerId = ""
+			r.writerCount.Store(0)
+			r.readerCount.Store(0)
 		}
 
 		if r.readerCount.Load() > 0 {
@@ -828,5 +896,9 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 				break
 			}
 		}
+
+		// notify waiters
+		r.cond.L.Unlock()
+		r.cond.Signal()
 	}, stopCbCh, updateTTLCh
 }

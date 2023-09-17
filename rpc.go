@@ -26,7 +26,7 @@ func (r *rpc) Lock(req *lockApi.Request, resp *lockApi.Response) error {
 
 	switch req.GetWait() {
 	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond*100)
+		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond)
 		defer cancel()
 	default:
 		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
