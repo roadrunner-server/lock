@@ -91,21 +91,29 @@ func (r *rpc) ForceRelease(req *lockApi.Request, resp *lockApi.Response) error {
 }
 
 func (r *rpc) Exists(req *lockApi.Request, resp *lockApi.Response) error {
-	r.log.Debug("'exists' request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	r.log.Debug("'exists' request received",
+		zap.Int("ttl", int(req.GetTtl())),
+		zap.Int("wait_ttl", int(req.GetWait())),
+		zap.String("resource", req.GetResource()),
+		zap.String("id", req.GetId()),
+	)
+
 	if req.GetId() == "" {
 		return errors.New("empty ID is not allowed")
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	resp.Ok = r.pl.locks.exists(ctx, req.GetResource(), req.GetId())
 	cancel()
 	return nil
 }
+
 func (r *rpc) UpdateTTL(req *lockApi.Request, resp *lockApi.Response) error {
 	r.log.Debug("updateTTL request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
 	if req.GetId() == "" {
 		return errors.New("empty ID is not allowed")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
 	resp.Ok = r.pl.locks.updateTTL(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
 	cancel()
 	return nil
