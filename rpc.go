@@ -26,7 +26,7 @@ func (r *rpc) Lock(req *lockApi.Request, resp *lockApi.Response) error {
 
 	switch req.GetWait() {
 	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond)
+		ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 	default:
 		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
@@ -55,7 +55,7 @@ func (r *rpc) LockRead(req *lockApi.Request, resp *lockApi.Response) error {
 
 	switch req.GetWait() {
 	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond*100)
+		ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 	default:
 		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
@@ -73,11 +73,30 @@ func (r *rpc) LockRead(req *lockApi.Request, resp *lockApi.Response) error {
 }
 
 func (r *rpc) Release(req *lockApi.Request, resp *lockApi.Response) error {
-	r.log.Debug("release request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	r.log.Debug("release request received",
+		zap.Int("ttl", int(req.GetTtl())),
+		zap.Int("wait_ttl", int(req.GetWait())),
+		zap.String("resource", req.GetResource()),
+		zap.String("id", req.GetId()),
+	)
+
 	if req.GetId() == "" {
 		return errors.New("empty ID is not allowed")
 	}
-	resp.Ok = r.pl.locks.release(context.Background(), req.GetResource(), req.GetId())
+
+	var ctx context.Context
+	var cancel context.CancelFunc
+
+	switch req.GetWait() {
+	case int64(0):
+		ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+	default:
+		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
+		defer cancel()
+	}
+
+	resp.Ok = r.pl.locks.release(ctx, req.GetResource(), req.GetId())
 	return nil
 }
 
@@ -86,7 +105,20 @@ func (r *rpc) ForceRelease(req *lockApi.Request, resp *lockApi.Response) error {
 	if req.GetId() == "" {
 		return errors.New("empty ID is not allowed")
 	}
-	resp.Ok = r.pl.locks.forceRelease(context.Background(), req.GetResource())
+
+	var ctx context.Context
+	var cancel context.CancelFunc
+
+	switch req.GetWait() {
+	case int64(0):
+		ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+	default:
+		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
+		defer cancel()
+	}
+
+	resp.Ok = r.pl.locks.forceRelease(ctx, req.GetResource())
 	return nil
 }
 
@@ -102,9 +134,19 @@ func (r *rpc) Exists(req *lockApi.Request, resp *lockApi.Response) error {
 		return errors.New("empty ID is not allowed")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	var ctx context.Context
+	var cancel context.CancelFunc
+
+	switch req.GetWait() {
+	case int64(0):
+		ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+	default:
+		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
+		defer cancel()
+	}
+
 	resp.Ok = r.pl.locks.exists(ctx, req.GetResource(), req.GetId())
-	cancel()
 	return nil
 }
 
@@ -113,8 +155,19 @@ func (r *rpc) UpdateTTL(req *lockApi.Request, resp *lockApi.Response) error {
 	if req.GetId() == "" {
 		return errors.New("empty ID is not allowed")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
+
+	var ctx context.Context
+	var cancel context.CancelFunc
+
+	switch req.GetWait() {
+	case int64(0):
+		ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+	default:
+		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
+		defer cancel()
+	}
+
 	resp.Ok = r.pl.locks.updateTTL(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
-	cancel()
 	return nil
 }

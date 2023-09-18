@@ -5,22 +5,36 @@ import (
 )
 
 type reslock struct {
-	ch chan struct{}
+	// mutex with timeout based on channel
+	operationMu chan struct{}
+	// lock methods should prevent calling release method and the same time
+	// release should be allowed only on the safe spots, e.g. waiting on notification
+	releaseMu chan struct{}
 }
 
 func newResLock() *reslock {
 	rl := &reslock{
-		ch: make(chan struct{}, 1),
+		// operation - lock/readLock/Release/UpdateTTL
+		operationMu: make(chan struct{}, 1),
+		// Should be freed to Release lock, updateTTL
+		releaseMu: make(chan struct{}, 1),
 	}
 
 	// arm
-	rl.ch <- struct{}{}
+	rl.operationMu <- struct{}{}
+	rl.releaseMu <- struct{}{}
 	return rl
 }
 
 func (r *reslock) lock(ctx context.Context) bool {
 	select {
-	case <-r.ch:
+	case <-r.operationMu:
+		select {
+		case <-r.releaseMu:
+		case <-ctx.Done():
+			r.operationMu <- struct{}{}
+			return false
+		}
 		return true
 	case <-ctx.Done():
 		return false
@@ -29,8 +43,38 @@ func (r *reslock) lock(ctx context.Context) bool {
 
 func (r *reslock) unlock() {
 	select {
-	case r.ch <- struct{}{}:
+	case r.operationMu <- struct{}{}:
+		select {
+		case r.releaseMu <- struct{}{}:
+		default:
+			panic("releaseMu is full")
+		}
 	default:
-		break
+		panic("operationMu is full")
+	}
+}
+
+func (r *reslock) unlockOperation() {
+	select {
+	case r.operationMu <- struct{}{}:
+	default:
+		panic("operationMu is full")
+	}
+}
+
+func (r *reslock) unlockRelease() {
+	select {
+	case r.releaseMu <- struct{}{}:
+	default:
+		panic("releaseMu is full")
+	}
+}
+
+func (r *reslock) lockRelease(ctx context.Context) bool {
+	select {
+	case <-r.releaseMu:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
