@@ -10,8 +10,10 @@ import (
 )
 
 // callback function is a function which should be executed right after it inserted into hashmap
-// generally callback is responsible of the removing itself from the hashmap
-type callback func(id string, notifiCh chan<- struct{}, stopCh <-chan struct{})
+// generally callback is responsible for the removing itself from the hashmap
+// id - id of the lock
+// notifyCh - channel to notify that all locks was removed
+type callback func(id string, notifyCh chan<- struct{}, stopCh <-chan struct{})
 
 // item represents callback element
 type item struct {
@@ -26,22 +28,19 @@ type item struct {
 // resource
 type resource struct {
 	ownerID atomic.Pointer[string]
-	// mutex is responsible for the locks, callback safety
-	// lock is the exclusive lock (should be 1 or 0)
+	// writerCount is the exclusive lock counter (should be 1 or 0)
 	writerCount atomic.Uint64
 	// readerCount is the number of readers (writers must be 0)
 	readerCount atomic.Uint64
 
 	// lock with timeout based on channel
 	resourceMu *reslock
-	// queue with locks
-	// might be 1 lock in case of lock or multiply in case of RLock
-	// first map holds resource
-	// second - associated with the resource callbacks
+	// map with the actual locks by ID
 	locks sync.Map // map[string]*item
 
 	// notificationCh used to notify that all locks are expired and user is free to obtain a new one
 	// this channel receive an event only if there are no locks (write/read)
+	// resource based
 	notificationCh chan struct{}
 	// stopCh should not receive any events. It's used as a brodcast-on-close event to notify all existing locks to expire
 	stopCh chan struct{}
@@ -225,7 +224,8 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 					zap.String("id", id),
 				)
 
-				// send stop signal to the particular lock
+				// send stop signal to the particular lock, here we have only 1 lock, we can send stop signal
+				// instead of closing the channel
 				select {
 				case rr.(*item).stopCh <- struct{}{}:
 				default:
