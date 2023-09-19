@@ -59,7 +59,7 @@ type locker struct {
 func newLocker(log *zap.Logger) *locker {
 	return &locker{
 		log:       log,
-		globalMu:  newResLock(),
+		globalMu:  newResLock(log),
 		resources: make(map[string]*resource, 5),
 	}
 }
@@ -94,13 +94,12 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		)
 
 		rr := &resource{
-			locks:          sync.Map{},
-			resourceMu:     newResLock(),
+			resourceMu:     newResLock(l.log),
 			notificationCh: make(chan struct{}, 1),
 			stopCh:         make(chan struct{}, 1),
 		}
 
-		rr.ownerID.Store(&id)
+		rr.ownerID.Store(ptrTo(id))
 		rr.writerCount.Store(1)
 		rr.readerCount.Store(0)
 
@@ -129,7 +128,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 	// lock the resource
 	if !r.resourceMu.lock(ctx) {
 		l.log.Warn("can't acquire a lock for the resource, timeout exceeded",
-			zap.String("res", res),
+			zap.String("resource", res),
 			zap.String("id", id),
 		)
 
@@ -143,6 +142,11 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 
 		// unlock the release mutex
 		r.resourceMu.unlockRelease()
+
+		l.log.Debug("release mutex unlocked",
+			zap.String("resource", res),
+			zap.String("id", id),
+		)
 
 		select {
 		// wait for the notification
@@ -171,7 +175,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 				return false
 			}
 
-			r.ownerID.Store(&id)
+			r.ownerID.Store(ptrTo(id))
 			r.writerCount.Store(1)
 			r.readerCount.Store(0)
 
@@ -188,9 +192,17 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			}()
 
 			r.resourceMu.unlock()
+
+			l.log.Debug("lock successfully acquired",
+				zap.String("resource", res),
+				zap.String("id", id),
+			)
 			return true
 		case <-ctx.Done():
-			l.log.Warn("lock notification wait timeout expired", zap.String("id", id))
+			l.log.Warn("lock notification wait timeout expired",
+				zap.String("resource", res),
+				zap.String("id", id),
+			)
 			// at this moment we're holding only resource lock
 			r.resourceMu.unlockOperation()
 			return false
@@ -200,23 +212,43 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 	case r.writerCount.Load() == 0 && r.readerCount.Load() > 0:
 		// check if that's possible to elevate read lock permission to write
 		if r.readerCount.Load() == 1 {
-			l.log.Debug("checking readers to elevate rlock permissions, w==0, r>0", zap.String("id", id))
+			l.log.Debug("checking readers to elevate rlock permissions, w==0, r>0",
+				zap.String("resource", res),
+				zap.String("id", id),
+			)
 
 			rr, okk := r.locks.Load(id)
 			if okk {
 				// promote lock from read to write
-				l.log.Debug("found read lock which can be promoted to write lock", zap.String("id", id))
+				l.log.Debug("found read lock which can be promoted to write lock",
+					zap.String("resource", res),
+					zap.String("id", id),
+				)
+
 				// send stop signal to the particular lock
-				close(rr.(*item).stopCh)
+				select {
+				case rr.(*item).stopCh <- struct{}{}:
+				default:
+					l.log.Debug("failed to send stop signal to the lock id, channel is full",
+						zap.String("resource", res),
+						zap.String("id", id),
+					)
+				}
 			}
 
 			r.resourceMu.unlockRelease()
 			// wait for the notification
-			l.log.Debug("waiting for the notification: r>0, w==0: r==0, w==0", zap.String("id", id))
+			l.log.Debug("waiting for the notification: r>0, w==0: r==0, w==0",
+				zap.String("resource", res),
+				zap.String("id", id),
+			)
 
 			select {
 			case <-r.notificationCh:
-				l.log.Debug("r==0 notification received", zap.String("id", id))
+				l.log.Debug("r==0 notification received",
+					zap.String("resource", res),
+					zap.String("id", id),
+				)
 
 				// get release mutex back
 				if !r.resourceMu.lockRelease(ctx) {
@@ -242,7 +274,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 				}
 
 				// store writer and remove reader
-				r.ownerID.Store(&id)
+				r.ownerID.Store(ptrTo(id))
 				r.writerCount.Store(1)
 				r.readerCount.Store(0)
 
@@ -280,7 +312,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		case <-r.notificationCh:
 			l.log.Debug("no readers holding mutex anymore, proceeding with acquiring write lock", zap.String("id", id))
 			// store writer and remove reader
-			r.ownerID.Store(&id)
+			r.ownerID.Store(ptrTo(id))
 			r.writerCount.Store(1)
 			r.readerCount.Store(0)
 
@@ -322,7 +354,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		}
 
 		// store the writer
-		r.ownerID.Store(&id)
+		r.ownerID.Store(ptrTo(id))
 		r.writerCount.Store(1)
 		r.readerCount.Store(0)
 
@@ -376,14 +408,12 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 		)
 
 		rr := &resource{
-			locks:          sync.Map{},
-			resourceMu:     newResLock(),
+			resourceMu:     newResLock(l.log),
 			notificationCh: make(chan struct{}, 1),
 			stopCh:         make(chan struct{}, 1),
 		}
 
-		ownerID := ""
-		rr.ownerID.Store(&ownerID)
+		rr.ownerID.Store(ptrTo(""))
 		rr.writerCount.Store(0)
 		rr.readerCount.Store(1)
 
@@ -584,7 +614,14 @@ func (l *locker) release(ctx context.Context, res, id string) bool {
 	}
 
 	// notify close by closing stopCh for the particular ID
-	close(rl.(*item).stopCh)
+	select {
+	case rl.(*item).stopCh <- struct{}{}:
+		l.log.Debug("force release notification sent",
+			zap.String("resource", res),
+			zap.String("id", id),
+		)
+	default:
+	}
 
 	l.log.Debug("lock successfully released",
 		zap.String("resource", res),
@@ -619,8 +656,8 @@ func (l *locker) forceRelease(ctx context.Context, res string) bool {
 		)
 		return false
 	}
-	// broadcast release signal
 
+	// broadcast release signal
 	r.locks.Range(func(key, value any) bool {
 		k := key.(string)
 		v := value.(*item)
@@ -774,46 +811,50 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 	// at this point, when adding lock, we should not have the callback
 	return func(lockID string, notifCh chan<- struct{}, sCh <-chan struct{}) {
 		// case for the items without TTL. We should add such items to control their flow
-		if ttl == 0 {
-			ttl = 31555952000000 // year
+		cbttl := ttl
+		if cbttl == 0 {
+			cbttl = 31555952000000 // year
 		}
 		// TTL channel
-		ta := time.NewTicker(time.Microsecond * time.Duration(ttl))
+		ta := time.NewTicker(time.Microsecond * time.Duration(cbttl))
 	loop:
 		select {
 		case <-ta.C:
 			l.log.Debug("r/lock: ttl expired",
 				zap.String("resource", res),
 				zap.String("id", lockID),
-				zap.Int("ttl microseconds", ttl),
+				zap.Int("ttl microseconds", cbttl),
 			)
 			ta.Stop()
 			// broadcast stop channel
 		case <-sCh:
-			l.log.Debug("r/lock: ttl removed, broadcast call",
+			l.log.Debug("r/lock: ttl removed, stop broadcast call",
 				zap.String("resource", res),
 				zap.String("id", lockID),
-				zap.Int("ttl microseconds", ttl),
+				zap.Int("ttl microseconds", cbttl),
 			)
 			ta.Stop()
 			// item stop channel
 		case <-stopCbCh:
-			l.log.Debug("r/lock: ttl removed, callback call",
+			l.log.Debug("r/lock: ttl removed, stop callback call",
 				zap.String("resource", res),
 				zap.String("id", lockID),
-				zap.Int("ttl microseconds", ttl),
+				zap.Int("ttl microseconds", cbttl),
 			)
 			ta.Stop()
 		case newTTL := <-updateTTLCh:
-			l.log.Debug("updating r/lock ttl",
+			l.log.Debug("r/lock: ttl was updated",
 				zap.String("resource", res),
 				zap.String("id", id),
-				zap.Int("new_ttl_microsec", newTTL))
+				zap.Int("new ttl microseconds", newTTL))
+			// update the initial ttl
+			cbttl = newTTL
 			ta.Reset(time.Microsecond * time.Duration(newTTL))
 			// in case of TTL we don't need to remove the item, only update TTL
 			goto loop
 		}
 
+		// unlimited, but should not be long
 		if !l.globalMu.lock(context.Background()) {
 			l.log.Debug("failed to acquire a global lock for release",
 				zap.String("resource", res),
@@ -837,8 +878,7 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 
 		if r.writerCount.Load() == 1 {
 			// clear owner, only writer might be an owner
-			ownerID := ""
-			r.ownerID.Store(&ownerID)
+			r.ownerID.Store(ptrTo(""))
 			r.writerCount.Store(0)
 			r.readerCount.Store(0)
 		}
@@ -849,10 +889,11 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 		}
 
 		l.log.Debug("current writers and readers count",
+			zap.String("resource", res),
+			zap.String("deleted id", id),
 			zap.Uint64("writers", r.writerCount.Load()),
 			zap.Uint64("readers", r.readerCount.Load()),
-			zap.String("resource", res),
-			zap.String("deleted id", id))
+		)
 
 		// we also have to check readers and writers to send notification
 		if r.writerCount.Load() == 0 && r.readerCount.Load() == 0 {
@@ -871,4 +912,8 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 			}
 		}
 	}, stopCbCh, updateTTLCh
+}
+
+func ptrTo[T any](val T) *T {
+	return &val
 }

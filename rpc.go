@@ -123,7 +123,7 @@ func (r *rpc) ForceRelease(req *lockApi.Request, resp *lockApi.Response) error {
 }
 
 func (r *rpc) Exists(req *lockApi.Request, resp *lockApi.Response) error {
-	r.log.Debug("'exists' request received",
+	r.log.Debug("exists request received",
 		zap.Int("ttl", int(req.GetTtl())),
 		zap.Int("wait_ttl", int(req.GetWait())),
 		zap.String("resource", req.GetResource()),
