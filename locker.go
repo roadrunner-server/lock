@@ -43,7 +43,7 @@ type resource struct {
 	// this channel receive an event only if there are no locks (write/read)
 	// resource based
 	notificationCh chan struct{}
-	// stopCh should not receive any events. It's used as a brodcast-on-close event to notify all existing locks to expire
+	// stopCh should not receive any events. It's used as a broadcast-on-close event to notify all existing locks to expire
 	stopCh chan struct{}
 }
 
