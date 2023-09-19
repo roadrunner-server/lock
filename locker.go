@@ -13,6 +13,7 @@ import (
 // generally callback is responsible for the removing itself from the hashmap
 // id - id of the lock
 // notifyCh - channel to notify that all locks was removed
+// stopCh - broadcast channel to stop all the callbacks associated with the resource
 type callback func(id string, notifyCh chan<- struct{}, stopCh <-chan struct{})
 
 // item represents callback element
