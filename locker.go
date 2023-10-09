@@ -812,12 +812,13 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 	// at this point, when adding lock, we should not have the callback
 	return func(lockID string, notifCh chan<- struct{}, sCh <-chan struct{}) {
 		// case for the items without TTL. We should add such items to control their flow
-		cbttl := ttl
-		if cbttl == 0 {
-			cbttl = 31555952000000 // year
+		if ttl == 0 {
+			ttl = 31555952000000 // year
 		}
+
+		cbttl := ttl
 		// TTL channel
-		ta := time.NewTicker(time.Microsecond * time.Duration(cbttl))
+		ta := time.NewTicker(time.Microsecond * time.Duration(ttl))
 	loop:
 		select {
 		case <-ta.C:
