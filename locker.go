@@ -812,13 +812,13 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 	// at this point, when adding lock, we should not have the callback
 	return func(lockID string, notifCh chan<- struct{}, sCh <-chan struct{}) {
 		// case for the items without TTL. We should add such items to control their flow
-		if ttl == 0 {
-			ttl = 31555952000000 // year
+		cbttl := ttl
+		if cbttl == 0 {
+			cbttl = 31555952000000 // year
 		}
 
-		cbttl := ttl
 		// TTL channel
-		ta := time.NewTicker(time.Microsecond * time.Duration(ttl))
+		ta := time.NewTicker(time.Microsecond * time.Duration(cbttl))
 	loop:
 		select {
 		case <-ta.C:
@@ -845,13 +845,17 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 			)
 			ta.Stop()
 		case newTTL := <-updateTTLCh:
+			// if the new TTL is 0, we should treat it as unlimited
+			if newTTL == 0 {
+				newTTL = 31555952000000 // year
+			}
 			l.log.Debug("r/lock: ttl was updated",
 				zap.String("resource", res),
 				zap.String("id", id),
 				zap.Int("new ttl microseconds", newTTL))
 			// update the initial ttl
 			cbttl = newTTL
-			ta.Reset(time.Microsecond * time.Duration(newTTL))
+			ta.Reset(time.Microsecond * time.Duration(cbttl))
 			// in case of TTL we don't need to remove the item, only update TTL
 			goto loop
 		}
@@ -867,7 +871,7 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 		defer l.globalMu.unlock()
 
 		// remove the item
-		// we need to protect bunch of the atomic operations here per-resource
+		// we need to protect a bunch of the atomic operations here per-resource
 		r, ok := l.resources[res]
 		if !ok {
 			l.log.Warn("no such resource, TTL expired",
@@ -879,14 +883,14 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 		r.locks.Delete(id)
 
 		if r.writerCount.Load() == 1 {
-			// clear owner, only writer might be an owner
+			// clear owner, only a writer might be an owner
 			r.ownerID.Store(ptrTo(""))
 			r.writerCount.Store(0)
 			r.readerCount.Store(0)
 		}
 
 		if r.readerCount.Load() > 0 {
-			// reduce number of readers
+			// reduce the number of readers
 			r.readerCount.Add(^uint64(0))
 		}
 
