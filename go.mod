@@ -2,7 +2,7 @@ module github.com/roadrunner-server/lock/v4
 
 go 1.21
 
-toolchain go1.21.0
+toolchain go1.21.5
 
 require (
 	github.com/roadrunner-server/api/v4 v4.10.0
