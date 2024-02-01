@@ -2,7 +2,7 @@ module tests
 
 go 1.21
 
-toolchain go1.22rc1
+toolchain go1.22rc2
 
 require (
 	github.com/roadrunner-server/api/v4 v4.10.0
@@ -31,7 +31,7 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/roadrunner-server/errors v1.3.0 // indirect
+	github.com/roadrunner-server/errors v1.4.0 // indirect
 	github.com/roadrunner-server/sdk/v4 v4.5.6 // indirect
 	github.com/roadrunner-server/tcplisten v1.4.0 // indirect
 	github.com/sagikazarmark/locafero v0.4.0 // indirect
