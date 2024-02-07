@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         php: [ "8.2" ]
-        go: [ stable ]
+        go: [ "1.21" ]
         os: [ "ubuntu-latest" ]
     steps:
       - name: Set up Go ${{ matrix.go }}
