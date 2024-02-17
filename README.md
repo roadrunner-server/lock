@@ -1,1 +1,1 @@
-# Docs: [link](https://roadrunner.dev/docs/plugins-locks/current)
+# Docs: [link](https://docs.roadrunner.dev/plugins/locks)
