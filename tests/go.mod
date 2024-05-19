@@ -4,12 +4,12 @@ go 1.22.3
 
 require (
 	github.com/roadrunner-server/api/v4 v4.12.0
-	github.com/roadrunner-server/config/v4 v4.8.1
+	github.com/roadrunner-server/config/v4 v4.8.2
 	github.com/roadrunner-server/endure/v2 v2.4.4
 	github.com/roadrunner-server/goridge/v3 v3.8.2
 	github.com/roadrunner-server/lock/v4 v4.5.14
-	github.com/roadrunner-server/logger/v4 v4.4.1
-	github.com/roadrunner-server/rpc/v4 v4.4.1
+	github.com/roadrunner-server/logger/v4 v4.4.2
+	github.com/roadrunner-server/rpc/v4 v4.4.2
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/zap v1.27.0
 )
