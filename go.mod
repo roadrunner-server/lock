@@ -3,7 +3,7 @@ module github.com/roadrunner-server/lock/v4
 go 1.22.4
 
 require (
-	github.com/roadrunner-server/api/v4 v4.12.0
+	github.com/roadrunner-server/api/v4 v4.13.0
 	go.uber.org/zap v1.27.0
 )
 
