@@ -32,7 +32,6 @@ func TestLockDifferentIDs(t *testing.T) {
 	cfg := &config.Plugin{
 		Version: "2023.3.0",
 		Path:    "configs/.rr-lock-init.yaml",
-		Prefix:  "rr",
 	}
 
 	l, oLogger := mocklogger.ZapTestLogger(zap.DebugLevel)
@@ -116,7 +115,6 @@ func TestLockInit(t *testing.T) {
 	cfg := &config.Plugin{
 		Version: "2023.2.0",
 		Path:    "configs/.rr-lock-init.yaml",
-		Prefix:  "rr",
 	}
 
 	err := cont.RegisterAll(
@@ -263,7 +261,6 @@ func TestLockFromSeveralProcesses(t *testing.T) {
 	cfg := &config.Plugin{
 		Version: "2023.1.0",
 		Path:    "configs/.rr-lock-init.yaml",
-		Prefix:  "rr",
 	}
 
 	err := cont.RegisterAll(
@@ -394,7 +391,6 @@ func TestLockReadInit(t *testing.T) {
 	cfg := &config.Plugin{
 		Version: "2023.1.0",
 		Path:    "configs/.rr-lock-init.yaml",
-		Prefix:  "rr",
 	}
 
 	l, oLogger := mocklogger.ZapTestLogger(zap.DebugLevel)
@@ -515,7 +511,6 @@ func TestLockUpdateTTL(t *testing.T) {
 	cfg := &config.Plugin{
 		Version: "2023.2.0",
 		Path:    "configs/.rr-lock-init.yaml",
-		Prefix:  "rr",
 	}
 
 	l, oLogger := mocklogger.ZapTestLogger(zap.DebugLevel)
@@ -607,7 +602,6 @@ func TestForceRelease(t *testing.T) {
 	cfg := &config.Plugin{
 		Version: "2023.2.0",
 		Path:    "configs/.rr-lock-init.yaml",
-		Prefix:  "rr",
 	}
 
 	l, oLogger := mocklogger.ZapTestLogger(zap.DebugLevel)

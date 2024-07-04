@@ -8,10 +8,10 @@ import (
 
 type reslock struct {
 	log *zap.Logger
-	// mutex with timeout based on channel
+	// mutex with timeout based on a channel
 	operationMu chan struct{}
-	// lock methods should prevent calling release method and the same time
-	// release should be allowed only on the safe spots, e.g. waiting on notification
+	// lock methods should prevent calling release method, and at the same time
+	// release should be allowed only on the safe spots, e.g., waiting on notification
 	releaseMu chan struct{}
 }
 

@@ -9,10 +9,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// callback function is a function which should be executed right after it inserted into hashmap
+// callback function is a function that should be executed right after it inserted into hashmap
 // generally callback is responsible for the removing itself from the hashmap
 // id - id of the lock
-// notifyCh - channel to notify that all locks was removed
+// notifyCh - channel to notify that all locks were removed
 // stopCh - broadcast channel to stop all the callbacks associated with the resource
 type callback func(id string, notifyCh chan<- struct{}, stopCh <-chan struct{})
 
@@ -34,14 +34,14 @@ type resource struct {
 	// readerCount is the number of readers (writers must be 0)
 	readerCount atomic.Uint64
 
-	// lock with timeout based on channel
+	// lock with timeout based on a channel
 	resourceMu *reslock
 	// map with the actual locks by ID
 	locks sync.Map // map[string]*item
 
-	// notificationCh used to notify that all locks are expired and user is free to obtain a new one
-	// this channel receive an event only if there are no locks (write/read)
-	// resource based
+	// notificationCh used to notify that all locks are expired and the user is free to get a new one
+	// this channel receives an event only if there are no locks (write/read)
+	//  resource-based
 	notificationCh chan struct{}
 	// stopCh should not receive any events. It's used as a broadcast-on-close event to notify all existing locks to expire
 	stopCh chan struct{}
@@ -67,13 +67,15 @@ func newLocker(log *zap.Logger) *locker {
 // lock used to acquire exclusive lock for the resource or promote read-lock to lock with the same ID
 /*
 Here may have the following scenarios:
-- No resource associated with the resource ID, create resource, add callback if we have TTL, increate writers to 1.
+- No resource associated with the resource ID, create resource, add callback if we have TTL, increase writers to 1.
 - Resource exists, no locks associated with it -> add callback if we have TTL, increase writers to 1
-- Resource exists, write lock already acquired. Wait on context and notification channel. Notification will be sent when the last lock is released.
+- Resource exists, write lock already acquired.
+Wait on a context and notification channel.
+Notification will be sent when the last lock is released.
 
 */
 func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
-	// first - check if the resource exists
+	// first - check if the resource exists,
 	// check if we have the resource
 	obt := l.globalMu.lock(ctx)
 	if !obt {
@@ -122,7 +124,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		return true
 	}
 
-	// after obtaining lock -> unlock the resource
+	// after getting lock -> unlock the resource
 	l.globalMu.unlock()
 
 	// lock the resource
@@ -136,7 +138,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 	}
 
 	switch {
-	// we have writer
+	// we have a writer
 	case r.readerCount.Load() == 0 && r.writerCount.Load() == 1:
 		l.log.Debug("waiting to hold the mutex", zap.String("id", id))
 
@@ -203,7 +205,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 				zap.String("resource", res),
 				zap.String("id", id),
 			)
-			// at this moment we're holding only resource lock
+			// at this moment we're holding only the resource lock
 			r.resourceMu.unlockOperation()
 			return false
 		}
@@ -303,13 +305,13 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			}
 		}
 
-		// at this point we know, that we have more than 1 read lock, so, we can't promote them to lock
+		// at this point we know that we have more than 1 read lock, so we can't promote them to lock
 		l.log.Debug("waiting for the readlocks to expire/release, w==0, r>0",
 			zap.String("resource", res),
 			zap.String("id", id))
 
 		select {
-		// we've got notification, that noone holding this mutex anymore
+		// we've got notification that no one holding this mutex anymore
 		case <-r.notificationCh:
 			l.log.Debug("no readers holding mutex anymore, proceeding with acquiring write lock", zap.String("id", id))
 			// store writer and remove reader
@@ -388,7 +390,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 }
 
 func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
-	// first - check if the resource exists
+	// first - check if the resource exists,
 	// check if we have the resource
 	obt := l.globalMu.lock(ctx)
 	if !obt {
@@ -437,7 +439,7 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 		return true
 	}
 
-	// after obtaining lock -> unlock the resource
+	// after getting lock -> unlock the resource
 	l.globalMu.unlock()
 
 	// lock the resource
@@ -452,7 +454,7 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 
 	// check tricky cases
 	switch {
-	// case when we have write lock
+	// case when we have written lock
 	case r.writerCount.Load() == 1:
 		if r.readerCount.Load() > 0 {
 			l.log.Error("write<->read lock incosistend state, w==1, r>0",
@@ -466,7 +468,7 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 		l.log.Debug("waiting to acquire a lock, w==1, r==0",
 			zap.String("resource", res),
 			zap.String("id", id))
-		// allow to release mutexes
+		// allow releasing mutexes
 
 		l.log.Debug("returning releaseMuCh mutex to temporarily allow releasing locks",
 			zap.String("resource", res),
@@ -527,7 +529,7 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 			return false
 		}
 
-		// case when we don't have writer and have 0 or more readers
+		// case when we don't have a writer and have 0 or more readers
 	case r.writerCount.Load() == 0:
 		l.log.Debug("adding read lock, w==0, r>=0",
 			zap.String("resource", res),
@@ -695,7 +697,7 @@ func (l *locker) exists(ctx context.Context, res, id string) bool {
 		return false
 	}
 
-	// special case, check if we have any locks
+	// Special case, check if we have any locks
 	if id == "*" {
 		if r.writerCount.Load() > 0 || r.readerCount.Load() > 0 {
 			return true
@@ -856,11 +858,11 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 			// update the initial ttl
 			cbttl = newTTL
 			ta.Reset(time.Microsecond * time.Duration(cbttl))
-			// in case of TTL we don't need to remove the item, only update TTL
+			// in case of TTL, we don't need to remove the item, only update TTL
 			goto loop
 		}
 
-		// unlimited, but should not be long
+		// unlimited but should not be long
 		if !l.globalMu.lock(context.Background()) {
 			l.log.Debug("failed to acquire a global lock for release",
 				zap.String("resource", res),
@@ -904,7 +906,7 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 		// we also have to check readers and writers to send notification
 		if r.writerCount.Load() == 0 && r.readerCount.Load() == 0 {
 			// only one resource, remove it
-			// and send notification to the notification channel
+			// and send a notification to the notification channel
 			select {
 			case notifCh <- struct{}{}:
 				l.log.Debug("deleting the last lock for the resource, sending notification",
