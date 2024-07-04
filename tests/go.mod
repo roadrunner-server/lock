@@ -7,14 +7,14 @@ require (
 	github.com/roadrunner-server/config/v4 v4.9.3
 	github.com/roadrunner-server/endure/v2 v2.4.5
 	github.com/roadrunner-server/goridge/v3 v3.8.2
-	github.com/roadrunner-server/lock/v4 v4.5.14
+	github.com/roadrunner-server/lock/v5 v5.0.0
 	github.com/roadrunner-server/logger/v4 v4.4.5
 	github.com/roadrunner-server/rpc/v4 v4.4.5
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/zap v1.27.0
 )
 
-replace github.com/roadrunner-server/lock/v4 => ../
+replace github.com/roadrunner-server/lock/v5 => ../
 
 require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect

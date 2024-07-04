@@ -1,4 +1,4 @@
-module github.com/roadrunner-server/lock/v4
+module github.com/roadrunner-server/lock/v5
 
 go 1.22.5
 
