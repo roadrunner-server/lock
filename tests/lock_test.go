@@ -14,11 +14,11 @@ import (
 
 	mocklogger "tests/mock"
 
-	"github.com/roadrunner-server/config/v4"
+	"github.com/roadrunner-server/config/v5"
 	"github.com/roadrunner-server/endure/v2"
 	lockPlugin "github.com/roadrunner-server/lock/v5"
-	"github.com/roadrunner-server/logger/v4"
-	rpcPlugin "github.com/roadrunner-server/rpc/v4"
+	"github.com/roadrunner-server/logger/v5"
+	rpcPlugin "github.com/roadrunner-server/rpc/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
