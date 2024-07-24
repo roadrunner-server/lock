@@ -3,7 +3,7 @@ module tests
 go 1.22.5
 
 require (
-	github.com/roadrunner-server/api/v4 v4.15.0
+	github.com/roadrunner-server/api/v4 v4.16.0
 	github.com/roadrunner-server/config/v5 v5.0.0
 	github.com/roadrunner-server/endure/v2 v2.4.5
 	github.com/roadrunner-server/goridge/v3 v3.8.2
@@ -31,6 +31,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/roadrunner-server/errors v1.4.0 // indirect
 	github.com/roadrunner-server/tcplisten v1.5.0 // indirect
+	github.com/rogpeppe/go-internal v1.11.0 // indirect
 	github.com/sagikazarmark/locafero v0.6.0 // indirect
 	github.com/sagikazarmark/slog-shim v0.1.0 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
