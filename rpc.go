@@ -102,9 +102,6 @@ func (r *rpc) Release(req *lockApi.Request, resp *lockApi.Response) error {
 
 func (r *rpc) ForceRelease(req *lockApi.Request, resp *lockApi.Response) error {
 	r.log.Debug("force release request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
-	if req.GetId() == "" {
-		return errors.New("empty ID is not allowed")
-	}
 
 	var ctx context.Context
 	var cancel context.CancelFunc

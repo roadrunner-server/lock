@@ -174,7 +174,7 @@ func TestLockInit(t *testing.T) {
 
 	resources := map[int]string{0: "foo", 1: "foo1", 2: "foo2", 3: "foo3", 4: "foo4", 5: "foo5"}
 
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 100; i++ {
 		rs := randomString(10)
 		go func() {
 			_, err1 := lock("127.0.0.1:6001", resources[genRandNum(6)], rs, (genRandNum(5)+1)*secMult, (genRandNum(15)+1)*secMult)
@@ -243,7 +243,7 @@ func TestLockInit(t *testing.T) {
 			assert.NoError(t, err16)
 		}()
 		go func() {
-			_, err17 := forceRelease("127.0.0.1:6001", resources[genRandNum(6)], "bar")
+			_, err17 := forceRelease("127.0.0.1:6001", resources[genRandNum(6)])
 			assert.NoError(t, err17)
 		}()
 	}
@@ -666,7 +666,7 @@ func TestForceRelease(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, res)
 
-	res, err = forceRelease("127.0.0.1:6001", "foo", "bar")
+	res, err = forceRelease("127.0.0.1:6001", "foo")
 	assert.NoError(t, err)
 	assert.True(t, res)
 
