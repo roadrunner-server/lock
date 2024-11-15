@@ -102,7 +102,7 @@ func updateTTL(address string, resource, id string, ttl int) (bool, error) {
 	return resp.Ok, nil
 }
 
-func forceRelease(address string, resource, id string) (bool, error) {
+func forceRelease(address string, resource string) (bool, error) {
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
 		return false, nil
@@ -111,7 +111,6 @@ func forceRelease(address string, resource, id string) (bool, error) {
 
 	req := &lockApi.Request{
 		Resource: resource,
-		Id:       id,
 	}
 
 	resp := &lockApi.Response{}
