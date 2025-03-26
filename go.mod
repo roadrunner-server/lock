@@ -5,7 +5,7 @@ go 1.24
 toolchain go1.24.0
 
 require (
-	github.com/roadrunner-server/api/v4 v4.18.1
+	github.com/roadrunner-server/api/v4 v4.19.0
 	go.uber.org/zap v1.27.0
 )
 
