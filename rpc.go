@@ -9,6 +9,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const defaultImmediateTimeout = time.Millisecond
+
 type rpc struct {
 	log *zap.Logger
 	pl  *Plugin
@@ -55,7 +57,7 @@ func (r *rpc) LockRead(req *lockApi.Request, resp *lockApi.Response) error {
 
 	switch req.GetWait() {
 	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond)
+		ctx, cancel = context.WithTimeout(context.Background(), defaultImmediateTimeout)
 		defer cancel()
 	default:
 		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
@@ -89,7 +91,7 @@ func (r *rpc) Release(req *lockApi.Request, resp *lockApi.Response) error {
 
 	switch req.GetWait() {
 	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond)
+		ctx, cancel = context.WithTimeout(context.Background(), defaultImmediateTimeout)
 		defer cancel()
 	default:
 		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
@@ -108,7 +110,7 @@ func (r *rpc) ForceRelease(req *lockApi.Request, resp *lockApi.Response) error {
 
 	switch req.GetWait() {
 	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond)
+		ctx, cancel = context.WithTimeout(context.Background(), defaultImmediateTimeout)
 		defer cancel()
 	default:
 		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
@@ -136,7 +138,7 @@ func (r *rpc) Exists(req *lockApi.Request, resp *lockApi.Response) error {
 
 	switch req.GetWait() {
 	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond)
+		ctx, cancel = context.WithTimeout(context.Background(), defaultImmediateTimeout)
 		defer cancel()
 	default:
 		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
@@ -158,7 +160,7 @@ func (r *rpc) UpdateTTL(req *lockApi.Request, resp *lockApi.Response) error {
 
 	switch req.GetWait() {
 	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond)
+		ctx, cancel = context.WithTimeout(context.Background(), defaultImmediateTimeout)
 		defer cancel()
 	default:
 		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
