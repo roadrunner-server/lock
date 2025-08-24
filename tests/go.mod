@@ -12,7 +12,7 @@ require (
 	github.com/roadrunner-server/lock/v5 v5.1.8
 	github.com/roadrunner-server/logger/v5 v5.1.8
 	github.com/roadrunner-server/rpc/v5 v5.1.8
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.0
 	go.uber.org/zap v1.27.0
 )
 
