@@ -4,7 +4,7 @@ import (
 	"net"
 	"net/rpc"
 
-	lockApi "github.com/roadrunner-server/api/v4/build/lock/v1beta1"
+	lockApi "github.com/roadrunner-server/api-go/v6/lock/v1"
 	goridgeRpc "github.com/roadrunner-server/goridge/v3/pkg/rpc"
 )
 
@@ -24,14 +24,14 @@ func lock(address string, resource, id string, ttl, wait int) (bool, error) {
 	}
 	client := rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn))
 
-	req := &lockApi.Request{
+	req := &lockApi.LockRequest{
 		Resource: resource,
 		Id:       id,
 		Ttl:      ptrTo(int64(ttl)),
 		Wait:     ptrTo(int64(wait)),
 	}
 
-	resp := &lockApi.Response{}
+	resp := &lockApi.LockResponse{}
 	err = client.Call(lockRPC, req, resp)
 	if err != nil {
 		return false, err
@@ -46,14 +46,14 @@ func lockRead(address string, resource, id string, ttl, wait int) (bool, error) 
 	}
 	client := rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn))
 
-	req := &lockApi.Request{
+	req := &lockApi.LockRequest{
 		Resource: resource,
 		Id:       id,
 		Ttl:      ptrTo(int64(ttl)),
 		Wait:     ptrTo(int64(wait)),
 	}
 
-	resp := &lockApi.Response{}
+	resp := &lockApi.LockResponse{}
 	err = client.Call(rlockRPC, req, resp)
 	if err != nil {
 		return false, err
@@ -68,12 +68,12 @@ func release(address string, resource, id string) (bool, error) {
 	}
 	client := rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn))
 
-	req := &lockApi.Request{
+	req := &lockApi.LockRequest{
 		Resource: resource,
 		Id:       id,
 	}
 
-	resp := &lockApi.Response{}
+	resp := &lockApi.LockResponse{}
 	err = client.Call(releaseRPC, req, resp)
 	if err != nil {
 		return false, err
@@ -88,13 +88,13 @@ func updateTTL(address string, resource, id string, ttl int) (bool, error) {
 	}
 	client := rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn))
 
-	req := &lockApi.Request{
+	req := &lockApi.LockRequest{
 		Resource: resource,
 		Id:       id,
 		Ttl:      ptrTo(int64(ttl)),
 	}
 
-	resp := &lockApi.Response{}
+	resp := &lockApi.LockResponse{}
 	err = client.Call(updateTTLRPC, req, resp)
 	if err != nil {
 		return false, nil
@@ -109,11 +109,11 @@ func forceRelease(address string, resource string) (bool, error) {
 	}
 	client := rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn))
 
-	req := &lockApi.Request{
+	req := &lockApi.LockRequest{
 		Resource: resource,
 	}
 
-	resp := &lockApi.Response{}
+	resp := &lockApi.LockResponse{}
 	err = client.Call(forceReleaseRPC, req, resp)
 	if err != nil {
 		return false, nil
@@ -128,12 +128,12 @@ func exists(address string, resource, id string) (bool, error) {
 	}
 	client := rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn))
 
-	req := &lockApi.Request{
+	req := &lockApi.LockRequest{
 		Resource: resource,
 		Id:       id,
 	}
 
-	resp := &lockApi.Response{}
+	resp := &lockApi.LockResponse{}
 	err = client.Call(existsRPC, req, resp)
 	if err != nil {
 		return false, nil

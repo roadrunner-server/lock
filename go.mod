@@ -1,12 +1,12 @@
-module github.com/roadrunner-server/lock/v5
+module github.com/roadrunner-server/lock/v6
 
 go 1.26
 
 toolchain go1.26.0
 
 require (
-	github.com/roadrunner-server/api/v4 v4.23.0
-	go.uber.org/zap v1.27.1
+	github.com/roadrunner-server/api-go/v6 v6.0.0-beta.4
+	go.uber.org/zap v1.28.0
 )
 
 require (
