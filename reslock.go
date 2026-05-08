@@ -2,12 +2,11 @@ package lock
 
 import (
 	"context"
-
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 type reslock struct {
-	log *zap.Logger
+	log *slog.Logger
 	// mutex with timeout based on a channel
 	operationMu chan struct{}
 	// lock methods should prevent calling release method, and at the same time
@@ -15,7 +14,7 @@ type reslock struct {
 	releaseMu chan struct{}
 }
 
-func newResLock(log *zap.Logger) *reslock {
+func newResLock(log *slog.Logger) *reslock {
 	rl := &reslock{
 		log: log,
 		// operation - lock/readLock/Release/UpdateTTL
@@ -39,7 +38,7 @@ func (r *reslock) lock(ctx context.Context) bool {
 			select {
 			case r.operationMu <- struct{}{}:
 			default:
-				r.log.DPanic("failed to put operation semaphore back, channel is full")
+				r.log.Error("failed to put operation semaphore back, channel is full")
 			}
 			return false
 		}
@@ -55,10 +54,10 @@ func (r *reslock) unlock() {
 		select {
 		case r.releaseMu <- struct{}{}:
 		default:
-			r.log.DPanic("failed to put release semaphore back, channel is full")
+			r.log.Error("failed to put release semaphore back, channel is full")
 		}
 	default:
-		r.log.DPanic("failed to put operation semaphore back, channel is full")
+		r.log.Error("failed to put operation semaphore back, channel is full")
 	}
 }
 
@@ -66,7 +65,7 @@ func (r *reslock) unlockOperation() {
 	select {
 	case r.operationMu <- struct{}{}:
 	default:
-		r.log.DPanic("failed to put operation semaphore back, channel is full")
+		r.log.Error("failed to put operation semaphore back, channel is full")
 	}
 }
 
@@ -74,7 +73,7 @@ func (r *reslock) unlockRelease() {
 	select {
 	case r.releaseMu <- struct{}{}:
 	default:
-		r.log.DPanic("failed to put release semaphore back, channel is full")
+		r.log.Error("failed to put release semaphore back, channel is full")
 	}
 }
 

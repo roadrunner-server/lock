@@ -3,21 +3,21 @@ package lock
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	lockApi "github.com/roadrunner-server/api-go/v6/lock/v1"
-	"go.uber.org/zap"
 )
 
 const defaultImmediateTimeout = time.Millisecond
 
 type rpc struct {
-	log *zap.Logger
+	log *slog.Logger
 	pl  *Plugin
 }
 
 func (r *rpc) Lock(req *lockApi.LockRequest, resp *lockApi.LockResponse) error {
-	r.log.Debug("lock request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	r.log.Debug("lock request received", "ttl", int(req.GetTtl()), "wait_ttl", int(req.GetWait()), "resource", req.GetResource(), "id", req.GetId())
 
 	if req.GetId() == "" {
 		return errors.New("empty ID is not allowed")
@@ -46,7 +46,7 @@ func (r *rpc) Lock(req *lockApi.LockRequest, resp *lockApi.LockResponse) error {
 }
 
 func (r *rpc) LockRead(req *lockApi.LockRequest, resp *lockApi.LockResponse) error {
-	r.log.Debug("read lock request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	r.log.Debug("read lock request received", "ttl", int(req.GetTtl()), "wait_ttl", int(req.GetWait()), "resource", req.GetResource(), "id", req.GetId())
 
 	if req.GetId() == "" {
 		return errors.New("empty ID is not allowed")
@@ -76,10 +76,10 @@ func (r *rpc) LockRead(req *lockApi.LockRequest, resp *lockApi.LockResponse) err
 
 func (r *rpc) Release(req *lockApi.LockRequest, resp *lockApi.LockResponse) error {
 	r.log.Debug("release request received",
-		zap.Int("ttl", int(req.GetTtl())),
-		zap.Int("wait_ttl", int(req.GetWait())),
-		zap.String("resource", req.GetResource()),
-		zap.String("id", req.GetId()),
+		"ttl", int(req.GetTtl()),
+		"wait_ttl", int(req.GetWait()),
+		"resource", req.GetResource(),
+		"id", req.GetId(),
 	)
 
 	if req.GetId() == "" {
@@ -103,7 +103,7 @@ func (r *rpc) Release(req *lockApi.LockRequest, resp *lockApi.LockResponse) erro
 }
 
 func (r *rpc) ForceRelease(req *lockApi.LockRequest, resp *lockApi.LockResponse) error {
-	r.log.Debug("force release request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	r.log.Debug("force release request received", "ttl", int(req.GetTtl()), "wait_ttl", int(req.GetWait()), "resource", req.GetResource(), "id", req.GetId())
 
 	var ctx context.Context
 	var cancel context.CancelFunc
@@ -123,10 +123,10 @@ func (r *rpc) ForceRelease(req *lockApi.LockRequest, resp *lockApi.LockResponse)
 
 func (r *rpc) Exists(req *lockApi.LockRequest, resp *lockApi.LockResponse) error {
 	r.log.Debug("exists request received",
-		zap.Int("ttl", int(req.GetTtl())),
-		zap.Int("wait_ttl", int(req.GetWait())),
-		zap.String("resource", req.GetResource()),
-		zap.String("id", req.GetId()),
+		"ttl", int(req.GetTtl()),
+		"wait_ttl", int(req.GetWait()),
+		"resource", req.GetResource(),
+		"id", req.GetId(),
 	)
 
 	if req.GetId() == "" {
@@ -150,7 +150,7 @@ func (r *rpc) Exists(req *lockApi.LockRequest, resp *lockApi.LockResponse) error
 }
 
 func (r *rpc) UpdateTTL(req *lockApi.LockRequest, resp *lockApi.LockResponse) error {
-	r.log.Debug("updateTTL request received", zap.Int("ttl", int(req.GetTtl())), zap.Int("wait_ttl", int(req.GetWait())), zap.String("resource", req.GetResource()), zap.String("id", req.GetId()))
+	r.log.Debug("updateTTL request received", "ttl", int(req.GetTtl()), "wait_ttl", int(req.GetWait()), "resource", req.GetResource(), "id", req.GetId())
 	if req.GetId() == "" {
 		return errors.New("empty ID is not allowed")
 	}

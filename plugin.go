@@ -2,19 +2,18 @@ package lock
 
 import (
 	"context"
-
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 const pluginName string = "lock"
 
 // Logger plugin
 type Logger interface {
-	NamedLogger(name string) *zap.Logger
+	NamedLogger(name string) *slog.Logger
 }
 
 type Plugin struct {
-	log   *zap.Logger
+	log   *slog.Logger
 	locks *locker
 }
 
