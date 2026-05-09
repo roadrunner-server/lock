@@ -12,8 +12,6 @@ import (
 	"testing"
 	"time"
 
-	mocklogger "tests/mock"
-
 	"github.com/roadrunner-server/config/v5"
 	"github.com/roadrunner-server/endure/v2"
 	lockPlugin "github.com/roadrunner-server/lock/v6"
@@ -21,7 +19,7 @@ import (
 	rpcPlugin "github.com/roadrunner-server/rpc/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
+	mocklogger "tests/mock"
 )
 
 const secMult = 1000000
@@ -34,7 +32,7 @@ func TestLockDifferentIDs(t *testing.T) {
 		Path:    "configs/.rr-lock-init.yaml",
 	}
 
-	l, oLogger := mocklogger.ZapTestLogger(zap.DebugLevel)
+	l, oLogger := mocklogger.SlogTestLogger(slog.LevelDebug)
 	err := cont.RegisterAll(
 		l,
 		cfg,
@@ -393,7 +391,7 @@ func TestLockReadInit(t *testing.T) {
 		Path:    "configs/.rr-lock-init.yaml",
 	}
 
-	l, oLogger := mocklogger.ZapTestLogger(zap.DebugLevel)
+	l, oLogger := mocklogger.SlogTestLogger(slog.LevelDebug)
 	err := cont.RegisterAll(
 		l,
 		cfg,
@@ -513,7 +511,7 @@ func TestLockUpdateTTL(t *testing.T) {
 		Path:    "configs/.rr-lock-init.yaml",
 	}
 
-	l, oLogger := mocklogger.ZapTestLogger(zap.DebugLevel)
+	l, oLogger := mocklogger.SlogTestLogger(slog.LevelDebug)
 	err := cont.RegisterAll(
 		cfg,
 		l,
@@ -604,7 +602,7 @@ func TestForceRelease(t *testing.T) {
 		Path:    "configs/.rr-lock-init.yaml",
 	}
 
-	l, oLogger := mocklogger.ZapTestLogger(zap.DebugLevel)
+	l, oLogger := mocklogger.SlogTestLogger(slog.LevelDebug)
 	err := cont.RegisterAll(
 		l,
 		cfg,
