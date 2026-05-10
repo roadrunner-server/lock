@@ -6,7 +6,7 @@ import (
 	"math/big"
 	"os"
 	"os/signal"
-	"sort"
+	"slices"
 	"sync"
 	"syscall"
 	"testing"
@@ -56,12 +56,10 @@ func TestLockDifferentIDs(t *testing.T) {
 	signal.Notify(sig, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
 	wg := &sync.WaitGroup{}
-	wg.Add(1)
 
 	stopCh := make(chan struct{}, 1)
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case e := <-ch:
@@ -85,7 +83,7 @@ func TestLockDifferentIDs(t *testing.T) {
 				return
 			}
 		}
-	}()
+	})
 
 	time.Sleep(time.Second)
 	res, err := lock("foo", "bar", 20*secMult, 100*secMult)
@@ -138,12 +136,10 @@ func TestLockInit(t *testing.T) {
 	signal.Notify(sig, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
 	wg := &sync.WaitGroup{}
-	wg.Add(1)
 
 	stopCh := make(chan struct{}, 1)
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case e := <-ch:
@@ -167,13 +163,13 @@ func TestLockInit(t *testing.T) {
 				return
 			}
 		}
-	}()
+	})
 
 	time.Sleep(time.Second * 3)
 
 	resources := map[int]string{0: "foo", 1: "foo1", 2: "foo2", 3: "foo3", 4: "foo4", 5: "foo5"}
 
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		rs := randomString(10)
 		go func() {
 			_, err1 := lock(resources[genRandNum(6)], rs, (genRandNum(5)+1)*secMult, (genRandNum(15)+1)*secMult)
@@ -284,12 +280,10 @@ func TestLockFromSeveralProcesses(t *testing.T) {
 	signal.Notify(sig, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
 	wg := &sync.WaitGroup{}
-	wg.Add(1)
 
 	stopCh := make(chan struct{}, 1)
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case e := <-ch:
@@ -313,7 +307,7 @@ func TestLockFromSeveralProcesses(t *testing.T) {
 				return
 			}
 		}
-	}()
+	})
 
 	time.Sleep(time.Second * 2)
 	answ := make([]int, 0, 4)
@@ -379,7 +373,7 @@ func TestLockFromSeveralProcesses(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	mu.Lock()
-	sort.Ints(answ)
+	slices.Sort(answ)
 	assert.Equal(t, []int{0, 0, 0, 1}, answ)
 	mu.Unlock()
 }
@@ -415,12 +409,10 @@ func TestLockReadInit(t *testing.T) {
 	signal.Notify(sig, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
 	wg := &sync.WaitGroup{}
-	wg.Add(1)
 
 	stopCh := make(chan struct{}, 1)
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case e := <-ch:
@@ -444,7 +436,7 @@ func TestLockReadInit(t *testing.T) {
 				return
 			}
 		}
-	}()
+	})
 
 	time.Sleep(time.Second * 3)
 	res, err := lock("foo", "bar", 5*secMult, 0)
@@ -458,20 +450,17 @@ func TestLockReadInit(t *testing.T) {
 	time.Sleep(time.Second)
 
 	wg2 := &sync.WaitGroup{}
-	wg2.Add(2)
-	go func() {
+	wg2.Go(func() {
 		res2, err2 := lockRead("foo", "bar1", 0, 11*secMult)
 		assert.True(t, res2)
 		assert.NoError(t, err2)
-		wg2.Done()
-	}()
+	})
 
-	go func() {
+	wg2.Go(func() {
 		res3, err3 := lockRead("foo", "bar2", 0, 11*secMult)
 		assert.True(t, res3)
 		assert.NoError(t, err3)
-		wg2.Done()
-	}()
+	})
 
 	wg2.Wait()
 	time.Sleep(time.Second)
@@ -535,12 +524,10 @@ func TestLockUpdateTTL(t *testing.T) {
 	signal.Notify(sig, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
 	wg := &sync.WaitGroup{}
-	wg.Add(1)
 
 	stopCh := make(chan struct{}, 1)
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case e := <-ch:
@@ -564,7 +551,7 @@ func TestLockUpdateTTL(t *testing.T) {
 				return
 			}
 		}
-	}()
+	})
 
 	time.Sleep(time.Second * 3)
 
@@ -626,12 +613,10 @@ func TestForceRelease(t *testing.T) {
 	signal.Notify(sig, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
 	wg := &sync.WaitGroup{}
-	wg.Add(1)
 
 	stopCh := make(chan struct{}, 1)
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case e := <-ch:
@@ -654,7 +639,7 @@ func TestForceRelease(t *testing.T) {
 				return
 			}
 		}
-	}()
+	})
 
 	time.Sleep(time.Second * 3)
 	res, err := lock("foo", "bar", 1000*secMult, 0)
