@@ -31,8 +31,6 @@ linters:
     - unused
     - whitespace
   settings:
-    dupl:
-      threshold: 100
     godot:
       scope: declarations
       capital: true

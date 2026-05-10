@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	mocklogger "tests/mock"
+
 	"github.com/roadrunner-server/config/v6"
 	"github.com/roadrunner-server/endure/v2"
 	lockPlugin "github.com/roadrunner-server/lock/v6"
@@ -19,7 +21,6 @@ import (
 	rpcPlugin "github.com/roadrunner-server/rpc/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	mocklogger "tests/mock"
 )
 
 const secMult = 1000000
@@ -87,13 +88,13 @@ func TestLockDifferentIDs(t *testing.T) {
 	}()
 
 	time.Sleep(time.Second)
-	res, err := lock("127.0.0.1:6001", "foo", "bar", 20*secMult, 100*secMult)
+	res, err := lock("foo", "bar", 20*secMult, 100*secMult)
 	assert.True(t, res)
 	assert.NoError(t, err)
 
 	time.Sleep(time.Second)
 
-	res, err = release("127.0.0.1:6001", "foo", "bar1")
+	res, err = release("foo", "bar1")
 	assert.False(t, res)
 	assert.NoError(t, err)
 
@@ -175,73 +176,73 @@ func TestLockInit(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		rs := randomString(10)
 		go func() {
-			_, err1 := lock("127.0.0.1:6001", resources[genRandNum(6)], rs, (genRandNum(5)+1)*secMult, (genRandNum(15)+1)*secMult)
+			_, err1 := lock(resources[genRandNum(6)], rs, (genRandNum(5)+1)*secMult, (genRandNum(15)+1)*secMult)
 			assert.NoError(t, err1)
 		}()
 		go func() {
-			_, err2 := lock("127.0.0.1:6001", resources[genRandNum(6)], randomString(3), (genRandNum(4)+1)*secMult, (genRandNum(11)+1)*secMult)
+			_, err2 := lock(resources[genRandNum(6)], randomString(3), (genRandNum(4)+1)*secMult, (genRandNum(11)+1)*secMult)
 			assert.NoError(t, err2)
 		}()
 		go func() {
-			_, err3 := lock("127.0.0.1:6001", resources[genRandNum(6)], randomString(3), (genRandNum(2)+1)*secMult, (genRandNum(90)+1)*secMult)
+			_, err3 := lock(resources[genRandNum(6)], randomString(3), (genRandNum(2)+1)*secMult, (genRandNum(90)+1)*secMult)
 			assert.NoError(t, err3)
 		}()
 		go func() {
-			_, err4 := lock("127.0.0.1:6001", resources[genRandNum(6)], randomString(3), (genRandNum(10)+1)*secMult, (genRandNum(10)+1)*secMult)
+			_, err4 := lock(resources[genRandNum(6)], randomString(3), (genRandNum(10)+1)*secMult, (genRandNum(10)+1)*secMult)
 			assert.NoError(t, err4)
 		}()
 		go func() {
-			_, err5 := lock("127.0.0.1:6001", resources[genRandNum(6)], randomString(3), (genRandNum(20)+1)*secMult, (genRandNum(13)+1)*secMult)
+			_, err5 := lock(resources[genRandNum(6)], randomString(3), (genRandNum(20)+1)*secMult, (genRandNum(13)+1)*secMult)
 			assert.NoError(t, err5)
 		}()
 		go func() {
-			_, err6 := lock("127.0.0.1:6001", resources[genRandNum(6)], randomString(3), (genRandNum(80)+1)*secMult, (genRandNum(10)+1)*secMult)
+			_, err6 := lock(resources[genRandNum(6)], randomString(3), (genRandNum(80)+1)*secMult, (genRandNum(10)+1)*secMult)
 			assert.NoError(t, err6)
 		}()
 		go func() {
-			_, err7 := lock("127.0.0.1:6001", resources[genRandNum(6)], randomString(3), (genRandNum(20)+1)*secMult, (genRandNum(19)+1)*secMult)
+			_, err7 := lock(resources[genRandNum(6)], randomString(3), (genRandNum(20)+1)*secMult, (genRandNum(19)+1)*secMult)
 			assert.NoError(t, err7)
 		}()
 		go func() {
-			_, err8 := updateTTL("127.0.0.1:6001", resources[genRandNum(6)], randomString(3), (genRandNum(5))*secMult)
+			_, err8 := updateTTL(resources[genRandNum(6)], randomString(3), (genRandNum(5))*secMult)
 			assert.NoError(t, err8)
 		}()
 		go func() {
-			_, err9 := exists("127.0.0.1:6001", resources[genRandNum(6)], rs)
+			_, err9 := exists(resources[genRandNum(6)], rs)
 			assert.NoError(t, err9)
 		}()
 
 		go func() {
-			_, err10 := release("127.0.0.1:6001", resources[genRandNum(6)], rs)
+			_, err10 := release(resources[genRandNum(6)], rs)
 			assert.NoError(t, err10)
 		}()
 
 		go func() {
-			_, err11 := lockRead("127.0.0.1:6001", resources[genRandNum(6)], randomString(3), (genRandNum(20)+1)*secMult, (genRandNum(15)+1)*secMult)
+			_, err11 := lockRead(resources[genRandNum(6)], randomString(3), (genRandNum(20)+1)*secMult, (genRandNum(15)+1)*secMult)
 			assert.NoError(t, err11)
 		}()
 		go func() {
-			_, err12 := lockRead("127.0.0.1:6001", resources[genRandNum(6)], randomString(3), (genRandNum(2)+1)*secMult, (genRandNum(34)+1)*secMult)
+			_, err12 := lockRead(resources[genRandNum(6)], randomString(3), (genRandNum(2)+1)*secMult, (genRandNum(34)+1)*secMult)
 			assert.NoError(t, err12)
 		}()
 		go func() {
-			_, err13 := lockRead("127.0.0.1:6001", resources[genRandNum(6)], randomString(3), (genRandNum(20)+1)*secMult, (genRandNum(13)+1)*secMult)
+			_, err13 := lockRead(resources[genRandNum(6)], randomString(3), (genRandNum(20)+1)*secMult, (genRandNum(13)+1)*secMult)
 			assert.NoError(t, err13)
 		}()
 		go func() {
-			_, err14 := lockRead("127.0.0.1:6001", resources[genRandNum(6)], randomString(3), (genRandNum(25)+1)*secMult, (genRandNum(15)+1)*secMult)
+			_, err14 := lockRead(resources[genRandNum(6)], randomString(3), (genRandNum(25)+1)*secMult, (genRandNum(15)+1)*secMult)
 			assert.NoError(t, err14)
 		}()
 		go func() {
-			_, err15 := lockRead("127.0.0.1:6001", resources[genRandNum(6)], randomString(3), (genRandNum(20)+1)*secMult, (genRandNum(76)+1)*secMult)
+			_, err15 := lockRead(resources[genRandNum(6)], randomString(3), (genRandNum(20)+1)*secMult, (genRandNum(76)+1)*secMult)
 			assert.NoError(t, err15)
 		}()
 		go func() {
-			_, err16 := lockRead("127.0.0.1:6001", resources[genRandNum(6)], randomString(3), (genRandNum(20)+1)*secMult, (genRandNum(15)+1)*secMult)
+			_, err16 := lockRead(resources[genRandNum(6)], randomString(3), (genRandNum(20)+1)*secMult, (genRandNum(15)+1)*secMult)
 			assert.NoError(t, err16)
 		}()
 		go func() {
-			_, err17 := forceRelease("127.0.0.1:6001", resources[genRandNum(6)])
+			_, err17 := forceRelease(resources[genRandNum(6)])
 			assert.NoError(t, err17)
 		}()
 	}
@@ -319,7 +320,7 @@ func TestLockFromSeveralProcesses(t *testing.T) {
 	mu := &sync.Mutex{}
 
 	go func() {
-		res, err := lock("127.0.0.1:6001", "foo", "bar", 5*secMult, 1*secMult)
+		res, err := lock("foo", "bar", 5*secMult, 1*secMult)
 		assert.NoError(t, err)
 
 		mu.Lock()
@@ -332,7 +333,7 @@ func TestLockFromSeveralProcesses(t *testing.T) {
 		}
 	}()
 	go func() {
-		res, err := lock("127.0.0.1:6001", "foo", "bar", 5*secMult, 1*secMult)
+		res, err := lock("foo", "bar", 5*secMult, 1*secMult)
 		assert.NoError(t, err)
 
 		mu.Lock()
@@ -345,7 +346,7 @@ func TestLockFromSeveralProcesses(t *testing.T) {
 		}
 	}()
 	go func() {
-		res, err := lock("127.0.0.1:6001", "foo", "bar", 5*secMult, 1*secMult)
+		res, err := lock("foo", "bar", 5*secMult, 1*secMult)
 		assert.NoError(t, err)
 
 		mu.Lock()
@@ -358,7 +359,7 @@ func TestLockFromSeveralProcesses(t *testing.T) {
 		}
 	}()
 	go func() {
-		res, err := lock("127.0.0.1:6001", "foo", "bar", 5*secMult, 1*secMult)
+		res, err := lock("foo", "bar", 5*secMult, 1*secMult)
 		assert.NoError(t, err)
 
 		mu.Lock()
@@ -446,11 +447,11 @@ func TestLockReadInit(t *testing.T) {
 	}()
 
 	time.Sleep(time.Second * 3)
-	res, err := lock("127.0.0.1:6001", "foo", "bar", 5*secMult, 0)
+	res, err := lock("foo", "bar", 5*secMult, 0)
 	assert.True(t, res)
 	assert.NoError(t, err)
 
-	res, err = lockRead("127.0.0.1:6001", "foo", "bar", 0, 10*secMult)
+	res, err = lockRead("foo", "bar", 0, 10*secMult)
 	assert.True(t, res)
 	assert.NoError(t, err)
 
@@ -459,14 +460,14 @@ func TestLockReadInit(t *testing.T) {
 	wg2 := &sync.WaitGroup{}
 	wg2.Add(2)
 	go func() {
-		res2, err2 := lockRead("127.0.0.1:6001", "foo", "bar1", 0, 11*secMult)
+		res2, err2 := lockRead("foo", "bar1", 0, 11*secMult)
 		assert.True(t, res2)
 		assert.NoError(t, err2)
 		wg2.Done()
 	}()
 
 	go func() {
-		res3, err3 := lockRead("127.0.0.1:6001", "foo", "bar2", 0, 11*secMult)
+		res3, err3 := lockRead("foo", "bar2", 0, 11*secMult)
 		assert.True(t, res3)
 		assert.NoError(t, err3)
 		wg2.Done()
@@ -475,20 +476,20 @@ func TestLockReadInit(t *testing.T) {
 	wg2.Wait()
 	time.Sleep(time.Second)
 
-	res, err = exists("127.0.0.1:6001", "foo", "bar1")
+	res, err = exists("foo", "bar1")
 	assert.True(t, res)
 	assert.NoError(t, err)
-	res, err = exists("127.0.0.1:6001", "foo", "bar2")
+	res, err = exists("foo", "bar2")
 	assert.True(t, res)
 	assert.NoError(t, err)
 
-	res, err = release("127.0.0.1:6001", "foo", "bar")
+	res, err = release("foo", "bar")
 	assert.True(t, res)
 	assert.NoError(t, err)
-	res, err = release("127.0.0.1:6001", "foo", "bar1")
+	res, err = release("foo", "bar1")
 	assert.True(t, res)
 	assert.NoError(t, err)
-	res, err = release("127.0.0.1:6001", "foo", "bar2")
+	res, err = release("foo", "bar2")
 	assert.True(t, res)
 	assert.NoError(t, err)
 
@@ -567,21 +568,21 @@ func TestLockUpdateTTL(t *testing.T) {
 
 	time.Sleep(time.Second * 3)
 
-	res, err := lock("127.0.0.1:6001", "foo", "bar", 1000*secMult, 0)
+	res, err := lock("foo", "bar", 1000*secMult, 0)
 	assert.NoError(t, err)
 	assert.True(t, res)
 
-	res, err = updateTTL("127.0.0.1:6001", "foo", "bar", 2*secMult)
+	res, err = updateTTL("foo", "bar", 2*secMult)
 	assert.NoError(t, err)
 	assert.True(t, res)
 
-	res, err = lockRead("127.0.0.1:6001", "foo", "bar1", 0, 10*secMult)
+	res, err = lockRead("foo", "bar1", 0, 10*secMult)
 	assert.NoError(t, err)
 	assert.True(t, res)
 
 	time.Sleep(time.Second * 3)
 
-	res, err = release("127.0.0.1:6001", "foo", "bar1")
+	res, err = release("foo", "bar1")
 	assert.NoError(t, err)
 	assert.True(t, res)
 
@@ -656,29 +657,29 @@ func TestForceRelease(t *testing.T) {
 	}()
 
 	time.Sleep(time.Second * 3)
-	res, err := lock("127.0.0.1:6001", "foo", "bar", 1000*secMult, 0)
+	res, err := lock("foo", "bar", 1000*secMult, 0)
 	assert.NoError(t, err)
 	assert.True(t, res)
 
-	res, err = lockRead("127.0.0.1:6001", "foo", "bar1", 0, 1*secMult)
+	res, err = lockRead("foo", "bar1", 0, 1*secMult)
 	assert.NoError(t, err)
 	assert.False(t, res)
 
-	res, err = forceRelease("127.0.0.1:6001", "foo")
+	res, err = forceRelease("foo")
 	assert.NoError(t, err)
 	assert.True(t, res)
 
-	res, err = lockRead("127.0.0.1:6001", "foo", "bar1", 0, 10*secMult)
+	res, err = lockRead("foo", "bar1", 0, 10*secMult)
 	assert.NoError(t, err)
 	assert.True(t, res)
 
 	time.Sleep(time.Second)
 
-	res, err = exists("127.0.0.1:6001", "foo", "bar1")
+	res, err = exists("foo", "bar1")
 	assert.NoError(t, err)
 	assert.True(t, res)
 
-	res, err = release("127.0.0.1:6001", "foo", "bar1")
+	res, err = release("foo", "bar1")
 	assert.NoError(t, err)
 	assert.True(t, res)
 
@@ -701,8 +702,8 @@ func randomString(n int) string {
 	return string(b)
 }
 
-func genRandNum(max int) int {
-	bg := big.NewInt(int64(max))
+func genRandNum(upper int) int {
+	bg := big.NewInt(int64(upper))
 
 	n, err := rand.Int(rand.Reader, bg)
 	if err != nil {

@@ -1,144 +1,128 @@
 package lock
 
 import (
+	"context"
+	"crypto/tls"
 	"net"
-	"net/rpc"
+	"net/http"
+	"sync"
+	"time"
 
-	lockApi "github.com/roadrunner-server/api-go/v6/lock/v1"
-	goridgeRpc "github.com/roadrunner-server/goridge/v4/pkg/rpc"
+	"connectrpc.com/connect"
+	lockV1 "github.com/roadrunner-server/api-go/v6/lock/v1"
+	"github.com/roadrunner-server/api-go/v6/lock/v1/lockV1connect"
+	"golang.org/x/net/http2"
 )
 
-const (
-	lockRPC         string = "lock.Lock"
-	rlockRPC        string = "lock.LockRead"
-	releaseRPC      string = "lock.Release"
-	updateTTLRPC    string = "lock.UpdateTTL"
-	forceReleaseRPC string = "lock.ForceRelease"
-	existsRPC       string = "lock.Exists"
-)
+const lockRPCAddr = "127.0.0.1:6001"
 
-func lock(address string, resource, id string, ttl, wait int) (bool, error) {
-	conn, err := net.Dial("tcp", address)
-	if err != nil {
-		return false, err
+// h2cClient is a shared HTTP/2 cleartext client for talking to the rpc plugin's mux.
+// All lock test calls hit the same address, so a single transport amortizes setup
+// across the suite and lets http2 pool connections.
+//
+//nolint:gochecknoglobals // shared transport is the entire point — pools idle conns across tests
+var h2cClient = sync.OnceValue(func() *http.Client {
+	return &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http2.Transport{
+			AllowHTTP: true,
+			DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+				return new(net.Dialer).DialContext(ctx, network, addr)
+			},
+		},
 	}
-	client := rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn))
+})
 
-	req := &lockApi.LockRequest{
-		Resource: resource,
-		Id:       id,
-		Ttl:      ptrTo(int64(ttl)),
-		Wait:     ptrTo(int64(wait)),
-	}
-
-	resp := &lockApi.LockResponse{}
-	err = client.Call(lockRPC, req, resp)
-	if err != nil {
-		return false, err
-	}
-	return resp.Ok, nil
+func newLockClient() lockV1connect.LockServiceClient {
+	return lockV1connect.NewLockServiceClient(h2cClient(), "http://"+lockRPCAddr)
 }
 
-func lockRead(address string, resource, id string, ttl, wait int) (bool, error) {
-	conn, err := net.Dial("tcp", address)
+func lock(resource, id string, ttl, wait int) (bool, error) {
+	resp, err := newLockClient().Lock(
+		context.Background(),
+		connect.NewRequest(&lockV1.LockRequest{
+			Resource: resource,
+			Id:       id,
+			Ttl:      ptrTo(int64(ttl)),
+			Wait:     ptrTo(int64(wait)),
+		}),
+	)
 	if err != nil {
 		return false, err
 	}
-	client := rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn))
+	return resp.Msg.GetOk(), nil
+}
 
-	req := &lockApi.LockRequest{
-		Resource: resource,
-		Id:       id,
-		Ttl:      ptrTo(int64(ttl)),
-		Wait:     ptrTo(int64(wait)),
-	}
-
-	resp := &lockApi.LockResponse{}
-	err = client.Call(rlockRPC, req, resp)
+func lockRead(resource, id string, ttl, wait int) (bool, error) {
+	resp, err := newLockClient().LockRead(
+		context.Background(),
+		connect.NewRequest(&lockV1.LockRequest{
+			Resource: resource,
+			Id:       id,
+			Ttl:      ptrTo(int64(ttl)),
+			Wait:     ptrTo(int64(wait)),
+		}),
+	)
 	if err != nil {
 		return false, err
 	}
-	return resp.Ok, nil
+	return resp.Msg.GetOk(), nil
 }
 
-func release(address string, resource, id string) (bool, error) {
-	conn, err := net.Dial("tcp", address)
+func release(resource, id string) (bool, error) {
+	resp, err := newLockClient().Release(
+		context.Background(),
+		connect.NewRequest(&lockV1.LockRequest{
+			Resource: resource,
+			Id:       id,
+		}),
+	)
 	if err != nil {
 		return false, err
 	}
-	client := rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn))
+	return resp.Msg.GetOk(), nil
+}
 
-	req := &lockApi.LockRequest{
-		Resource: resource,
-		Id:       id,
-	}
-
-	resp := &lockApi.LockResponse{}
-	err = client.Call(releaseRPC, req, resp)
+func updateTTL(resource, id string, ttl int) (bool, error) {
+	resp, err := newLockClient().UpdateTTL(
+		context.Background(),
+		connect.NewRequest(&lockV1.LockRequest{
+			Resource: resource,
+			Id:       id,
+			Ttl:      ptrTo(int64(ttl)),
+		}),
+	)
 	if err != nil {
 		return false, err
 	}
-	return resp.Ok, nil
+	return resp.Msg.GetOk(), nil
 }
 
-func updateTTL(address string, resource, id string, ttl int) (bool, error) {
-	conn, err := net.Dial("tcp", address)
+func forceRelease(resource string) (bool, error) {
+	resp, err := newLockClient().ForceRelease(
+		context.Background(),
+		connect.NewRequest(&lockV1.LockRequest{
+			Resource: resource,
+		}),
+	)
 	if err != nil {
-		return false, nil
+		return false, err
 	}
-	client := rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn))
-
-	req := &lockApi.LockRequest{
-		Resource: resource,
-		Id:       id,
-		Ttl:      ptrTo(int64(ttl)),
-	}
-
-	resp := &lockApi.LockResponse{}
-	err = client.Call(updateTTLRPC, req, resp)
-	if err != nil {
-		return false, nil
-	}
-	return resp.Ok, nil
+	return resp.Msg.GetOk(), nil
 }
 
-func forceRelease(address string, resource string) (bool, error) {
-	conn, err := net.Dial("tcp", address)
+func exists(resource, id string) (bool, error) {
+	resp, err := newLockClient().Exists(
+		context.Background(),
+		connect.NewRequest(&lockV1.LockRequest{
+			Resource: resource,
+			Id:       id,
+		}),
+	)
 	if err != nil {
-		return false, nil
+		return false, err
 	}
-	client := rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn))
-
-	req := &lockApi.LockRequest{
-		Resource: resource,
-	}
-
-	resp := &lockApi.LockResponse{}
-	err = client.Call(forceReleaseRPC, req, resp)
-	if err != nil {
-		return false, nil
-	}
-	return resp.Ok, nil
-}
-
-func exists(address string, resource, id string) (bool, error) {
-	conn, err := net.Dial("tcp", address)
-	if err != nil {
-		return false, nil
-	}
-	client := rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn))
-
-	req := &lockApi.LockRequest{
-		Resource: resource,
-		Id:       id,
-	}
-
-	resp := &lockApi.LockResponse{}
-	err = client.Call(existsRPC, req, resp)
-	if err != nil {
-		return false, nil
-	}
-	return resp.Ok, nil
+	return resp.Msg.GetOk(), nil
 }
 
 func ptrTo[T any](val T) *T {
