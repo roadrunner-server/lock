@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"time"
 
 	"connectrpc.com/connect"
 	lockV1 "github.com/roadrunner-server/api-go/v6/lock/v1"
@@ -18,12 +17,13 @@ const lockRPCAddr = "127.0.0.1:6001"
 
 // h2cClient is a shared HTTP/2 cleartext client for talking to the rpc plugin's mux.
 // All lock test calls hit the same address, so a single transport amortizes setup
-// across the suite and lets http2 pool connections.
+// across the suite and lets http2 pool connections. No client-side Timeout is set:
+// lock RPCs carry a server-honored Wait field that bounds blocking on contended locks
+// (TestLockInit goes up to ~91s); the server's wait is the authoritative deadline.
 //
 //nolint:gochecknoglobals // shared transport is the entire point — pools idle conns across tests
 var h2cClient = sync.OnceValue(func() *http.Client {
 	return &http.Client{
-		Timeout: 10 * time.Second,
 		Transport: &http2.Transport{
 			AllowHTTP: true,
 			DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
