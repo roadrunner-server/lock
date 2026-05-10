@@ -43,8 +43,6 @@ func (p *Plugin) Name() string {
 	return pluginName
 }
 
-// RPC returns the Connect-RPC service handler for lock.v1.LockService.
-// The rpc plugin mounts the returned handler at the returned path on its HTTP/2 mux.
 func (p *Plugin) RPC() (string, http.Handler) {
-	return lockV1connect.NewLockServiceHandler(&rpc{pl: p, log: p.log})
+	return lockV1connect.NewLockServiceHandler(&rpc{pl: p})
 }
