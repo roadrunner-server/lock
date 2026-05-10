@@ -43,8 +43,8 @@ func lock(resource, id string, ttl, wait int) (bool, error) {
 		connect.NewRequest(&lockV1.LockRequest{
 			Resource: resource,
 			Id:       id,
-			Ttl:      ptrTo(int64(ttl)),
-			Wait:     ptrTo(int64(wait)),
+			Ttl:      new(int64(ttl)),
+			Wait:     new(int64(wait)),
 		}),
 	)
 	if err != nil {
@@ -59,8 +59,8 @@ func lockRead(resource, id string, ttl, wait int) (bool, error) {
 		connect.NewRequest(&lockV1.LockRequest{
 			Resource: resource,
 			Id:       id,
-			Ttl:      ptrTo(int64(ttl)),
-			Wait:     ptrTo(int64(wait)),
+			Ttl:      new(int64(ttl)),
+			Wait:     new(int64(wait)),
 		}),
 	)
 	if err != nil {
@@ -89,7 +89,7 @@ func updateTTL(resource, id string, ttl int) (bool, error) {
 		connect.NewRequest(&lockV1.LockRequest{
 			Resource: resource,
 			Id:       id,
-			Ttl:      ptrTo(int64(ttl)),
+			Ttl:      new(int64(ttl)),
 		}),
 	)
 	if err != nil {
@@ -123,8 +123,4 @@ func exists(resource, id string) (bool, error) {
 		return false, err
 	}
 	return resp.Msg.GetOk(), nil
-}
-
-func ptrTo[T any](val T) *T {
-	return &val
 }
