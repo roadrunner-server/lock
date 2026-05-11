@@ -25,93 +25,87 @@ func waitContext(parent context.Context, waitUs int64) (context.Context, context
 }
 
 func (r *rpc) Lock(ctx context.Context, req *connect.Request[lockV1.LockRequest]) (*connect.Response[lockV1.LockResponse], error) {
-	msg := req.Msg
-	r.pl.log.Debug("lock request received", "ttl", int(msg.GetTtl()), "wait_ttl", int(msg.GetWait()), "resource", msg.GetResource(), "id", msg.GetId())
+	r.pl.log.Debug("lock request received", "ttl", int(req.Msg.GetTtl()), "wait_ttl", int(req.Msg.GetWait()), "resource", req.Msg.GetResource(), "id", req.Msg.GetId())
 
-	if msg.GetId() == "" {
+	if req.Msg.GetId() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errEmptyID)
 	}
 
-	cctx, cancel := waitContext(ctx, msg.GetWait())
+	cctx, cancel := waitContext(ctx, req.Msg.GetWait())
 	defer cancel()
 
 	return connect.NewResponse(&lockV1.LockResponse{
-		Ok: r.pl.locks.lock(cctx, msg.GetResource(), msg.GetId(), int(msg.GetTtl())),
+		Ok: r.pl.locks.lock(cctx, req.Msg.GetResource(), req.Msg.GetId(), int(req.Msg.GetTtl())),
 	}), nil
 }
 
 func (r *rpc) LockRead(ctx context.Context, req *connect.Request[lockV1.LockRequest]) (*connect.Response[lockV1.LockResponse], error) {
-	msg := req.Msg
-	r.pl.log.Debug("read lock request received", "ttl", int(msg.GetTtl()), "wait_ttl", int(msg.GetWait()), "resource", msg.GetResource(), "id", msg.GetId())
+	r.pl.log.Debug("read lock request received", "ttl", int(req.Msg.GetTtl()), "wait_ttl", int(req.Msg.GetWait()), "resource", req.Msg.GetResource(), "id", req.Msg.GetId())
 
-	if msg.GetId() == "" {
+	if req.Msg.GetId() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errEmptyID)
 	}
 
-	cctx, cancel := waitContext(ctx, msg.GetWait())
+	cctx, cancel := waitContext(ctx, req.Msg.GetWait())
 	defer cancel()
 
 	return connect.NewResponse(&lockV1.LockResponse{
-		Ok: r.pl.locks.lockRead(cctx, msg.GetResource(), msg.GetId(), int(msg.GetTtl())),
+		Ok: r.pl.locks.lockRead(cctx, req.Msg.GetResource(), req.Msg.GetId(), int(req.Msg.GetTtl())),
 	}), nil
 }
 
 func (r *rpc) Release(ctx context.Context, req *connect.Request[lockV1.LockRequest]) (*connect.Response[lockV1.LockResponse], error) {
-	msg := req.Msg
-	r.pl.log.Debug("release request received", "ttl", int(msg.GetTtl()), "wait_ttl", int(msg.GetWait()), "resource", msg.GetResource(), "id", msg.GetId())
+	r.pl.log.Debug("release request received", "ttl", int(req.Msg.GetTtl()), "wait_ttl", int(req.Msg.GetWait()), "resource", req.Msg.GetResource(), "id", req.Msg.GetId())
 
-	if msg.GetId() == "" {
+	if req.Msg.GetId() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errEmptyID)
 	}
 
-	cctx, cancel := waitContext(ctx, msg.GetWait())
+	cctx, cancel := waitContext(ctx, req.Msg.GetWait())
 	defer cancel()
 
 	return connect.NewResponse(&lockV1.LockResponse{
-		Ok: r.pl.locks.release(cctx, msg.GetResource(), msg.GetId()),
+		Ok: r.pl.locks.release(cctx, req.Msg.GetResource(), req.Msg.GetId()),
 	}), nil
 }
 
 func (r *rpc) ForceRelease(ctx context.Context, req *connect.Request[lockV1.LockRequest]) (*connect.Response[lockV1.LockResponse], error) {
-	msg := req.Msg
-	r.pl.log.Debug("force release request received", "ttl", int(msg.GetTtl()), "wait_ttl", int(msg.GetWait()), "resource", msg.GetResource(), "id", msg.GetId())
+	r.pl.log.Debug("force release request received", "ttl", int(req.Msg.GetTtl()), "wait_ttl", int(req.Msg.GetWait()), "resource", req.Msg.GetResource(), "id", req.Msg.GetId())
 
-	cctx, cancel := waitContext(ctx, msg.GetWait())
+	cctx, cancel := waitContext(ctx, req.Msg.GetWait())
 	defer cancel()
 
 	return connect.NewResponse(&lockV1.LockResponse{
-		Ok: r.pl.locks.forceRelease(cctx, msg.GetResource()),
+		Ok: r.pl.locks.forceRelease(cctx, req.Msg.GetResource()),
 	}), nil
 }
 
 func (r *rpc) Exists(ctx context.Context, req *connect.Request[lockV1.LockRequest]) (*connect.Response[lockV1.LockResponse], error) {
-	msg := req.Msg
-	r.pl.log.Debug("exists request received", "ttl", int(msg.GetTtl()), "wait_ttl", int(msg.GetWait()), "resource", msg.GetResource(), "id", msg.GetId())
+	r.pl.log.Debug("exists request received", "ttl", int(req.Msg.GetTtl()), "wait_ttl", int(req.Msg.GetWait()), "resource", req.Msg.GetResource(), "id", req.Msg.GetId())
 
-	if msg.GetId() == "" {
+	if req.Msg.GetId() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errEmptyID)
 	}
 
-	cctx, cancel := waitContext(ctx, msg.GetWait())
+	cctx, cancel := waitContext(ctx, req.Msg.GetWait())
 	defer cancel()
 
 	return connect.NewResponse(&lockV1.LockResponse{
-		Ok: r.pl.locks.exists(cctx, msg.GetResource(), msg.GetId()),
+		Ok: r.pl.locks.exists(cctx, req.Msg.GetResource(), req.Msg.GetId()),
 	}), nil
 }
 
 func (r *rpc) UpdateTTL(ctx context.Context, req *connect.Request[lockV1.LockRequest]) (*connect.Response[lockV1.LockResponse], error) {
-	msg := req.Msg
-	r.pl.log.Debug("updateTTL request received", "ttl", int(msg.GetTtl()), "wait_ttl", int(msg.GetWait()), "resource", msg.GetResource(), "id", msg.GetId())
+	r.pl.log.Debug("updateTTL request received", "ttl", int(req.Msg.GetTtl()), "wait_ttl", int(req.Msg.GetWait()), "resource", req.Msg.GetResource(), "id", req.Msg.GetId())
 
-	if msg.GetId() == "" {
+	if req.Msg.GetId() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errEmptyID)
 	}
 
-	cctx, cancel := waitContext(ctx, msg.GetWait())
+	cctx, cancel := waitContext(ctx, req.Msg.GetWait())
 	defer cancel()
 
 	return connect.NewResponse(&lockV1.LockResponse{
-		Ok: r.pl.locks.updateTTL(cctx, msg.GetResource(), msg.GetId(), int(msg.GetTtl())),
+		Ok: r.pl.locks.updateTTL(cctx, req.Msg.GetResource(), req.Msg.GetId(), int(req.Msg.GetTtl())),
 	}), nil
 }
