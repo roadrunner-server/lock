@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
-	"sync"
 
 	"connectrpc.com/connect"
 	lockV1 "github.com/roadrunner-server/api-go/v6/lock/v1"
@@ -15,12 +14,8 @@ import (
 
 const lockRPCAddr = "127.0.0.1:6001"
 
-// Shared h2c client; no client Timeout — server-side Wait is authoritative
-// (and tests pass Wait values larger than any reasonable client deadline).
-//
-//nolint:gochecknoglobals // shared transport is the entire point — pools idle conns across tests
-var h2cClient = sync.OnceValue(func() *http.Client {
-	return &http.Client{
+func newLockClient() lockV1connect.LockServiceClient {
+	httpc := &http.Client{
 		Transport: &http2.Transport{
 			AllowHTTP: true,
 			DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
@@ -28,10 +23,7 @@ var h2cClient = sync.OnceValue(func() *http.Client {
 			},
 		},
 	}
-})
-
-func newLockClient() lockV1connect.LockServiceClient {
-	return lockV1connect.NewLockServiceClient(h2cClient(), "http://"+lockRPCAddr)
+	return lockV1connect.NewLockServiceClient(httpc, "http://"+lockRPCAddr)
 }
 
 func lock(resource, id string, ttl, wait int) (bool, error) {
