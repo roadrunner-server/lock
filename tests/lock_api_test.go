@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -174,6 +176,53 @@ func TestLockHTTPApi(t *testing.T) {
 	var existsResp2 lockV1.LockResponse
 	call("Exists", &lockV1.LockRequest{Resource: resource, Id: id}, &existsResp2)
 	require.False(t, existsResp2.GetOk())
+}
+
+// TestLockHTTPGetIdempotency verifies which methods accept HTTP GET. Only
+// Exists is marked `option idempotency_level = NO_SIDE_EFFECTS;` in the proto,
+// so Connect generates a handler that accepts GET for it. Mutating methods
+// stay POST-only, so GET against them returns 405 Method Not Allowed.
+func TestLockHTTPGetIdempotency(t *testing.T) {
+	stop := startLockAPIContainer(t)
+	defer stop()
+
+	body, err := protojson.Marshal(&lockV1.LockRequest{Resource: "probe", Id: "probe"})
+	require.NoError(t, err)
+
+	q := url.Values{}
+	q.Set("encoding", "json")
+	q.Set("base64", "1")
+	q.Set("message", base64.URLEncoding.EncodeToString(body))
+
+	cases := []struct {
+		method     string
+		wantStatus int
+	}{
+		{"Exists", http.StatusOK},
+		{"Lock", http.StatusMethodNotAllowed},
+		{"LockRead", http.StatusMethodNotAllowed},
+		{"Release", http.StatusMethodNotAllowed},
+		{"ForceRelease", http.StatusMethodNotAllowed},
+		{"UpdateTTL", http.StatusMethodNotAllowed},
+	}
+
+	httpc := &http.Client{Timeout: 30 * time.Second}
+	for _, c := range cases {
+		t.Run(c.method, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+				"http://"+lockAPIAddr+"/lock.v1.LockService/"+c.method+"?"+q.Encode(), nil)
+			require.NoError(t, err)
+
+			resp, err := httpc.Do(req)
+			require.NoError(t, err)
+			defer func() { _ = resp.Body.Close() }()
+
+			respBody, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			require.Equalf(t, c.wantStatus, resp.StatusCode,
+				"%s via GET -> %s\n%s", c.method, resp.Status, respBody)
+		})
+	}
 }
 
 // TestLockGRPCApi exercises the lock RPCs through a regular gRPC client
