@@ -3,6 +3,9 @@ package lock
 import (
 	"context"
 	"log/slog"
+	"net/http"
+
+	"github.com/roadrunner-server/api-go/v6/lock/v1/lockV1connect"
 )
 
 const pluginName string = "lock"
@@ -40,9 +43,6 @@ func (p *Plugin) Name() string {
 	return pluginName
 }
 
-func (p *Plugin) RPC() any {
-	return &rpc{
-		log: p.log,
-		pl:  p,
-	}
+func (p *Plugin) RPC() (string, http.Handler) {
+	return lockV1connect.NewLockServiceHandler(&rpc{pl: p})
 }

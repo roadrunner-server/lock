@@ -2,171 +2,110 @@ package lock
 
 import (
 	"context"
-	"errors"
-	"log/slog"
+	stderr "errors"
 	"time"
 
-	lockApi "github.com/roadrunner-server/api-go/v6/lock/v1"
+	"connectrpc.com/connect"
+	lockV1 "github.com/roadrunner-server/api-go/v6/lock/v1"
 )
 
 const defaultImmediateTimeout = time.Millisecond
 
+var errEmptyID = stderr.New("empty ID is not allowed")
+
 type rpc struct {
-	log *slog.Logger
-	pl  *Plugin
+	pl *Plugin
 }
 
-func (r *rpc) Lock(req *lockApi.LockRequest, resp *lockApi.LockResponse) error {
-	r.log.Debug("lock request received", "ttl", int(req.GetTtl()), "wait_ttl", int(req.GetWait()), "resource", req.GetResource(), "id", req.GetId())
-
-	if req.GetId() == "" {
-		return errors.New("empty ID is not allowed")
+func waitContext(parent context.Context, waitUs int64) (context.Context, context.CancelFunc) {
+	if waitUs == 0 {
+		return context.WithTimeout(parent, defaultImmediateTimeout)
 	}
-
-	var ctx context.Context
-	var cancel context.CancelFunc
-
-	switch req.GetWait() {
-	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), defaultImmediateTimeout)
-		defer cancel()
-	default:
-		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
-		defer cancel()
-	}
-
-	acq := r.pl.locks.lock(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
-	if acq {
-		resp.Ok = true
-		return nil
-	}
-
-	resp.Ok = false
-	return nil
+	return context.WithTimeout(parent, time.Microsecond*time.Duration(waitUs))
 }
 
-func (r *rpc) LockRead(req *lockApi.LockRequest, resp *lockApi.LockResponse) error {
-	r.log.Debug("read lock request received", "ttl", int(req.GetTtl()), "wait_ttl", int(req.GetWait()), "resource", req.GetResource(), "id", req.GetId())
+func (r *rpc) Lock(ctx context.Context, req *connect.Request[lockV1.LockRequest]) (*connect.Response[lockV1.LockResponse], error) {
+	r.pl.log.Debug("lock request received", "ttl", int(req.Msg.GetTtl()), "wait_ttl", int(req.Msg.GetWait()), "resource", req.Msg.GetResource(), "id", req.Msg.GetId())
 
-	if req.GetId() == "" {
-		return errors.New("empty ID is not allowed")
+	if req.Msg.GetId() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errEmptyID)
 	}
 
-	var ctx context.Context
-	var cancel context.CancelFunc
+	cctx, cancel := waitContext(ctx, req.Msg.GetWait())
+	defer cancel()
 
-	switch req.GetWait() {
-	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), defaultImmediateTimeout)
-		defer cancel()
-	default:
-		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
-		defer cancel()
-	}
-
-	acq := r.pl.locks.lockRead(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
-	if acq {
-		resp.Ok = true
-		return nil
-	}
-
-	resp.Ok = false
-	return nil
+	return connect.NewResponse(&lockV1.LockResponse{
+		Ok: r.pl.locks.lock(cctx, req.Msg.GetResource(), req.Msg.GetId(), int(req.Msg.GetTtl())),
+	}), nil
 }
 
-func (r *rpc) Release(req *lockApi.LockRequest, resp *lockApi.LockResponse) error {
-	r.log.Debug("release request received",
-		"ttl", int(req.GetTtl()),
-		"wait_ttl", int(req.GetWait()),
-		"resource", req.GetResource(),
-		"id", req.GetId(),
-	)
+func (r *rpc) LockRead(ctx context.Context, req *connect.Request[lockV1.LockRequest]) (*connect.Response[lockV1.LockResponse], error) {
+	r.pl.log.Debug("read lock request received", "ttl", int(req.Msg.GetTtl()), "wait_ttl", int(req.Msg.GetWait()), "resource", req.Msg.GetResource(), "id", req.Msg.GetId())
 
-	if req.GetId() == "" {
-		return errors.New("empty ID is not allowed")
+	if req.Msg.GetId() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errEmptyID)
 	}
 
-	var ctx context.Context
-	var cancel context.CancelFunc
+	cctx, cancel := waitContext(ctx, req.Msg.GetWait())
+	defer cancel()
 
-	switch req.GetWait() {
-	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), defaultImmediateTimeout)
-		defer cancel()
-	default:
-		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
-		defer cancel()
-	}
-
-	resp.Ok = r.pl.locks.release(ctx, req.GetResource(), req.GetId())
-	return nil
+	return connect.NewResponse(&lockV1.LockResponse{
+		Ok: r.pl.locks.lockRead(cctx, req.Msg.GetResource(), req.Msg.GetId(), int(req.Msg.GetTtl())),
+	}), nil
 }
 
-func (r *rpc) ForceRelease(req *lockApi.LockRequest, resp *lockApi.LockResponse) error {
-	r.log.Debug("force release request received", "ttl", int(req.GetTtl()), "wait_ttl", int(req.GetWait()), "resource", req.GetResource(), "id", req.GetId())
+func (r *rpc) Release(ctx context.Context, req *connect.Request[lockV1.LockRequest]) (*connect.Response[lockV1.LockResponse], error) {
+	r.pl.log.Debug("release request received", "ttl", int(req.Msg.GetTtl()), "wait_ttl", int(req.Msg.GetWait()), "resource", req.Msg.GetResource(), "id", req.Msg.GetId())
 
-	var ctx context.Context
-	var cancel context.CancelFunc
-
-	switch req.GetWait() {
-	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), defaultImmediateTimeout)
-		defer cancel()
-	default:
-		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
-		defer cancel()
+	if req.Msg.GetId() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errEmptyID)
 	}
 
-	resp.Ok = r.pl.locks.forceRelease(ctx, req.GetResource())
-	return nil
+	cctx, cancel := waitContext(ctx, req.Msg.GetWait())
+	defer cancel()
+
+	return connect.NewResponse(&lockV1.LockResponse{
+		Ok: r.pl.locks.release(cctx, req.Msg.GetResource(), req.Msg.GetId()),
+	}), nil
 }
 
-func (r *rpc) Exists(req *lockApi.LockRequest, resp *lockApi.LockResponse) error {
-	r.log.Debug("exists request received",
-		"ttl", int(req.GetTtl()),
-		"wait_ttl", int(req.GetWait()),
-		"resource", req.GetResource(),
-		"id", req.GetId(),
-	)
+func (r *rpc) ForceRelease(ctx context.Context, req *connect.Request[lockV1.LockRequest]) (*connect.Response[lockV1.LockResponse], error) {
+	r.pl.log.Debug("force release request received", "ttl", int(req.Msg.GetTtl()), "wait_ttl", int(req.Msg.GetWait()), "resource", req.Msg.GetResource(), "id", req.Msg.GetId())
 
-	if req.GetId() == "" {
-		return errors.New("empty ID is not allowed")
-	}
+	cctx, cancel := waitContext(ctx, req.Msg.GetWait())
+	defer cancel()
 
-	var ctx context.Context
-	var cancel context.CancelFunc
-
-	switch req.GetWait() {
-	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), defaultImmediateTimeout)
-		defer cancel()
-	default:
-		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
-		defer cancel()
-	}
-
-	resp.Ok = r.pl.locks.exists(ctx, req.GetResource(), req.GetId())
-	return nil
+	return connect.NewResponse(&lockV1.LockResponse{
+		Ok: r.pl.locks.forceRelease(cctx, req.Msg.GetResource()),
+	}), nil
 }
 
-func (r *rpc) UpdateTTL(req *lockApi.LockRequest, resp *lockApi.LockResponse) error {
-	r.log.Debug("updateTTL request received", "ttl", int(req.GetTtl()), "wait_ttl", int(req.GetWait()), "resource", req.GetResource(), "id", req.GetId())
-	if req.GetId() == "" {
-		return errors.New("empty ID is not allowed")
+func (r *rpc) Exists(ctx context.Context, req *connect.Request[lockV1.LockRequest]) (*connect.Response[lockV1.LockResponse], error) {
+	r.pl.log.Debug("exists request received", "ttl", int(req.Msg.GetTtl()), "wait_ttl", int(req.Msg.GetWait()), "resource", req.Msg.GetResource(), "id", req.Msg.GetId())
+
+	if req.Msg.GetId() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errEmptyID)
 	}
 
-	var ctx context.Context
-	var cancel context.CancelFunc
+	cctx, cancel := waitContext(ctx, req.Msg.GetWait())
+	defer cancel()
 
-	switch req.GetWait() {
-	case int64(0):
-		ctx, cancel = context.WithTimeout(context.Background(), defaultImmediateTimeout)
-		defer cancel()
-	default:
-		ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*time.Duration(req.GetWait()))
-		defer cancel()
+	return connect.NewResponse(&lockV1.LockResponse{
+		Ok: r.pl.locks.exists(cctx, req.Msg.GetResource(), req.Msg.GetId()),
+	}), nil
+}
+
+func (r *rpc) UpdateTTL(ctx context.Context, req *connect.Request[lockV1.LockRequest]) (*connect.Response[lockV1.LockResponse], error) {
+	r.pl.log.Debug("updateTTL request received", "ttl", int(req.Msg.GetTtl()), "wait_ttl", int(req.Msg.GetWait()), "resource", req.Msg.GetResource(), "id", req.Msg.GetId())
+
+	if req.Msg.GetId() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errEmptyID)
 	}
 
-	resp.Ok = r.pl.locks.updateTTL(ctx, req.GetResource(), req.GetId(), int(req.GetTtl()))
-	return nil
+	cctx, cancel := waitContext(ctx, req.Msg.GetWait())
+	defer cancel()
+
+	return connect.NewResponse(&lockV1.LockResponse{
+		Ok: r.pl.locks.updateTTL(cctx, req.Msg.GetResource(), req.Msg.GetId(), int(req.Msg.GetTtl())),
+	}), nil
 }

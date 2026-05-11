@@ -100,7 +100,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			stopCh:         make(chan struct{}, 1),
 		}
 
-		rr.ownerID.Store(ptrTo(id))
+		rr.ownerID.Store(new(id))
 		rr.writerCount.Store(1)
 		rr.readerCount.Store(0)
 
@@ -176,7 +176,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 				return false
 			}
 
-			r.ownerID.Store(ptrTo(id))
+			r.ownerID.Store(new(id))
 			r.writerCount.Store(1)
 			r.readerCount.Store(0)
 
@@ -276,7 +276,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 				}
 
 				// store writer and remove reader
-				r.ownerID.Store(ptrTo(id))
+				r.ownerID.Store(new(id))
 				r.writerCount.Store(1)
 				r.readerCount.Store(0)
 
@@ -314,7 +314,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		case <-r.notificationCh:
 			l.log.Debug("no readers holding mutex anymore, proceeding with acquiring write lock", "id", id)
 			// store writer and remove reader
-			r.ownerID.Store(ptrTo(id))
+			r.ownerID.Store(new(id))
 			r.writerCount.Store(1)
 			r.readerCount.Store(0)
 
@@ -356,7 +356,7 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		}
 
 		// store the writer
-		r.ownerID.Store(ptrTo(id))
+		r.ownerID.Store(new(id))
 		r.writerCount.Store(1)
 		r.readerCount.Store(0)
 
@@ -415,7 +415,7 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 			stopCh:         make(chan struct{}, 1),
 		}
 
-		rr.ownerID.Store(ptrTo(""))
+		rr.ownerID.Store(new(""))
 		rr.writerCount.Store(0)
 		rr.readerCount.Store(1)
 
@@ -885,7 +885,7 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 
 		if r.writerCount.Load() == 1 {
 			// clear owner, only a writer might be an owner
-			r.ownerID.Store(ptrTo(""))
+			r.ownerID.Store(new(""))
 			r.writerCount.Store(0)
 			r.readerCount.Store(0)
 		}
@@ -919,8 +919,4 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 			}
 		}
 	}, stopCbCh, updateTTLCh
-}
-
-func ptrTo[T any](val T) *T {
-	return &val
 }
