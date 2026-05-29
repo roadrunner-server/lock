@@ -2,7 +2,7 @@ package lock
 
 import (
 	"context"
-	stderr "errors"
+	"errors"
 	"time"
 
 	"connectrpc.com/connect"
@@ -11,7 +11,7 @@ import (
 
 const defaultImmediateTimeout = time.Millisecond
 
-var errEmptyID = stderr.New("empty ID is not allowed")
+var errEmptyID = errors.New("empty ID is not allowed")
 
 type rpc struct {
 	pl *Plugin
