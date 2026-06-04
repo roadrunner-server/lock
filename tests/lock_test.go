@@ -677,6 +677,120 @@ func TestForceRelease(t *testing.T) {
 	assert.Equal(t, 2, oLogger.FilterMessageSnippet("r/lock: ttl removed, stop callback call").Len())
 }
 
+// startLockContainer brings up rpc + lock + logger on 127.0.0.1:6001 and returns
+// a stop function the test must defer. Used by the deterministic coverage tests
+// below (the api-test helper lives in lock_api_test.go, which is not part of the
+// coverage build).
+func startLockContainer(t *testing.T) func() {
+	t.Helper()
+
+	cont := endure.New(slog.LevelError)
+	cfg := &config.Plugin{
+		Version: "2024.2.0",
+		Path:    "configs/.rr-lock-init.yaml",
+	}
+
+	require.NoError(t, cont.RegisterAll(
+		cfg,
+		&logger.Plugin{},
+		&rpcPlugin.Plugin{},
+		&lockPlugin.Plugin{},
+	))
+	require.NoError(t, cont.Init())
+
+	ch, err := cont.Serve()
+	require.NoError(t, err)
+
+	wg := &sync.WaitGroup{}
+	stop := make(chan struct{})
+	wg.Go(func() {
+		select {
+		case e := <-ch:
+			require.NoError(t, e.Error, "container reported error")
+		case <-stop:
+		}
+	})
+
+	time.Sleep(time.Second) // let rpc bind 6001
+
+	return func() {
+		close(stop)
+		require.NoError(t, cont.Stop())
+		wg.Wait()
+	}
+}
+
+// TestLockWaitThenAcquire covers the write-lock wait-then-acquire arm of lock():
+// a second writer blocks on the notification channel and acquires the lock once
+// the holder's TTL expires (rather than timing out, as the other tests do).
+func TestLockWaitThenAcquire(t *testing.T) {
+	defer startLockContainer(t)()
+
+	// A holds the write lock; it expires on its own after ~2s.
+	ok, err := lock("wta", "A", 2*secMult, 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	done := make(chan bool, 1)
+	go func() {
+		// B waits up to 10s; it wakes on A's expiry notification and acquires.
+		got, e := lock("wta", "B", 10*secMult, 10*secMult)
+		assert.NoError(t, e)
+		done <- got
+	}()
+
+	select {
+	case got := <-done:
+		assert.True(t, got, "B should acquire the lock after A expires")
+	case <-time.After(15 * time.Second):
+		t.Fatal("B never acquired the lock")
+	}
+}
+
+// TestLockPromoteReadToWrite covers the read->write promotion arm of lock():
+// a single read lock is promoted to a write lock by the same id.
+func TestLockPromoteReadToWrite(t *testing.T) {
+	defer startLockContainer(t)()
+
+	ok, err := lockRead("promote", "X", 100*secMult, 0) // r=1, w=0
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// Same id requests a write lock: the promotion arm signals the reader to
+	// stop, waits for the notification, then takes the write lock.
+	ok, err = lock("promote", "X", 10*secMult, 10*secMult)
+	require.NoError(t, err)
+	require.True(t, ok)
+}
+
+// TestExistsWildcard covers the exists() wildcard branch (id == "*"), which
+// reports whether a resource holds any lock at all.
+func TestExistsWildcard(t *testing.T) {
+	defer startLockContainer(t)()
+
+	ok, err := lock("wild", "Y", 100*secMult, 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ok, err = exists("wild", "*") // resource has a writer -> true
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ok, err = exists("absent", "*") // no such resource -> false
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	ok, err = release("wild", "Y")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	time.Sleep(time.Second) // let the callback zero the counters
+
+	ok, err = exists("wild", "*") // resource exists but holds no locks -> false
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
 const letterBytes = "abc"
 
 func randomString(n int) string {
