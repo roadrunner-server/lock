@@ -706,7 +706,7 @@ func startLockContainer(t *testing.T) func() {
 	wg.Go(func() {
 		select {
 		case e := <-ch:
-			require.NoError(t, e.Error, "container reported error")
+			assert.NoError(t, e.Error, "container reported error")
 		case <-stop:
 		}
 	})
