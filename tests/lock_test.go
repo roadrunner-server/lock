@@ -731,20 +731,11 @@ func TestLockWaitThenAcquire(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	done := make(chan bool, 1)
-	go func() {
-		// B waits up to 10s; it wakes on A's expiry notification and acquires.
-		got, e := lock("wta", "B", 10*secMult, 10*secMult)
-		assert.NoError(t, e)
-		done <- got
-	}()
-
-	select {
-	case got := <-done:
-		assert.True(t, got, "B should acquire the lock after A expires")
-	case <-time.After(15 * time.Second):
-		t.Fatal("B never acquired the lock")
-	}
+	// B blocks waiting for the lock (up to its 10s wait) and acquires it once
+	// A's TTL expires, exercising the wait-then-acquire arm instead of timing out.
+	ok, err = lock("wta", "B", 10*secMult, 10*secMult)
+	require.NoError(t, err)
+	require.True(t, ok, "B should acquire the lock after A expires")
 }
 
 // TestLockPromoteReadToWrite covers the read->write promotion arm of lock():
