@@ -168,6 +168,8 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 					"id", id,
 					"writers", r.writerCount.Load(),
 					"readers", r.readerCount.Load())
+
+				r.resourceMu.unlock()
 				return false
 			}
 
