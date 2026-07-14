@@ -2,114 +2,79 @@ package lock
 
 import (
 	"context"
-	"crypto/tls"
 	"net"
-	"net/http"
+	"net/rpc"
 
-	"connectrpc.com/connect"
 	lockV1 "github.com/roadrunner-server/api-go/v6/lock/v1"
-	"github.com/roadrunner-server/api-go/v6/lock/v1/lockV1connect"
-	"golang.org/x/net/http2"
+	goridgeRpc "github.com/roadrunner-server/goridge/v4/pkg/rpc"
 )
 
 const lockRPCAddr = "127.0.0.1:6001"
 
-func newLockClient() lockV1connect.LockServiceClient {
-	httpc := &http.Client{
-		Transport: &http2.Transport{
-			AllowHTTP: true,
-			DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-				return new(net.Dialer).DialContext(ctx, network, addr)
-			},
-		},
+func newLockClient() (*rpc.Client, error) {
+	conn, err := new(net.Dialer).DialContext(context.Background(), "tcp", lockRPCAddr)
+	if err != nil {
+		return nil, err
 	}
-	return lockV1connect.NewLockServiceClient(httpc, "http://"+lockRPCAddr)
+	return rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn)), nil
+}
+
+func call(method string, in *lockV1.LockRequest) (bool, error) {
+	cl, err := newLockClient()
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = cl.Close() }()
+
+	out := &lockV1.LockResponse{}
+	if err := cl.Call(method, in, out); err != nil {
+		return false, err
+	}
+	return out.GetOk(), nil
 }
 
 func lock(resource, id string, ttl, wait int) (bool, error) {
-	resp, err := newLockClient().Lock(
-		context.Background(),
-		connect.NewRequest(&lockV1.LockRequest{
-			Resource: resource,
-			Id:       id,
-			Ttl:      new(int64(ttl)),
-			Wait:     new(int64(wait)),
-		}),
-	)
-	if err != nil {
-		return false, err
-	}
-	return resp.Msg.GetOk(), nil
+	return call("lock.Lock", &lockV1.LockRequest{
+		Resource: resource,
+		Id:       id,
+		Ttl:      new(int64(ttl)),
+		Wait:     new(int64(wait)),
+	})
 }
 
 func lockRead(resource, id string, ttl, wait int) (bool, error) {
-	resp, err := newLockClient().LockRead(
-		context.Background(),
-		connect.NewRequest(&lockV1.LockRequest{
-			Resource: resource,
-			Id:       id,
-			Ttl:      new(int64(ttl)),
-			Wait:     new(int64(wait)),
-		}),
-	)
-	if err != nil {
-		return false, err
-	}
-	return resp.Msg.GetOk(), nil
+	return call("lock.LockRead", &lockV1.LockRequest{
+		Resource: resource,
+		Id:       id,
+		Ttl:      new(int64(ttl)),
+		Wait:     new(int64(wait)),
+	})
 }
 
 func release(resource, id string) (bool, error) {
-	resp, err := newLockClient().Release(
-		context.Background(),
-		connect.NewRequest(&lockV1.LockRequest{
-			Resource: resource,
-			Id:       id,
-		}),
-	)
-	if err != nil {
-		return false, err
-	}
-	return resp.Msg.GetOk(), nil
+	return call("lock.Release", &lockV1.LockRequest{
+		Resource: resource,
+		Id:       id,
+	})
 }
 
 func updateTTL(resource, id string, ttl int) (bool, error) {
-	resp, err := newLockClient().UpdateTTL(
-		context.Background(),
-		connect.NewRequest(&lockV1.LockRequest{
-			Resource: resource,
-			Id:       id,
-			Ttl:      new(int64(ttl)),
-		}),
-	)
-	if err != nil {
-		return false, err
-	}
-	return resp.Msg.GetOk(), nil
+	return call("lock.UpdateTTL", &lockV1.LockRequest{
+		Resource: resource,
+		Id:       id,
+		Ttl:      new(int64(ttl)),
+	})
 }
 
 func forceRelease(resource string) (bool, error) {
-	resp, err := newLockClient().ForceRelease(
-		context.Background(),
-		connect.NewRequest(&lockV1.LockRequest{
-			Resource: resource,
-		}),
-	)
-	if err != nil {
-		return false, err
-	}
-	return resp.Msg.GetOk(), nil
+	return call("lock.ForceRelease", &lockV1.LockRequest{
+		Resource: resource,
+	})
 }
 
 func exists(resource, id string) (bool, error) {
-	resp, err := newLockClient().Exists(
-		context.Background(),
-		connect.NewRequest(&lockV1.LockRequest{
-			Resource: resource,
-			Id:       id,
-		}),
-	)
-	if err != nil {
-		return false, err
-	}
-	return resp.Msg.GetOk(), nil
+	return call("lock.Exists", &lockV1.LockRequest{
+		Resource: resource,
+		Id:       id,
+	})
 }
