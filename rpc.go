@@ -23,7 +23,7 @@ func waitContext(parent context.Context, waitUs int64) (context.Context, context
 	return context.WithTimeout(parent, time.Microsecond*time.Duration(waitUs))
 }
 
-func (r *rpc) Lock(in *lockV1.LockRequest, out *lockV1.LockResponse) error {
+func (r *rpc) Lock(in *lockV1.Request, out *lockV1.Response) error {
 	r.pl.log.Debug("lock request received", "ttl", int(in.GetTtl()), "wait_ttl", int(in.GetWait()), "resource", in.GetResource(), "id", in.GetId())
 
 	if in.GetId() == "" {
@@ -37,7 +37,7 @@ func (r *rpc) Lock(in *lockV1.LockRequest, out *lockV1.LockResponse) error {
 	return nil
 }
 
-func (r *rpc) LockRead(in *lockV1.LockRequest, out *lockV1.LockResponse) error {
+func (r *rpc) LockRead(in *lockV1.Request, out *lockV1.Response) error {
 	r.pl.log.Debug("read lock request received", "ttl", int(in.GetTtl()), "wait_ttl", int(in.GetWait()), "resource", in.GetResource(), "id", in.GetId())
 
 	if in.GetId() == "" {
@@ -51,7 +51,7 @@ func (r *rpc) LockRead(in *lockV1.LockRequest, out *lockV1.LockResponse) error {
 	return nil
 }
 
-func (r *rpc) Release(in *lockV1.LockRequest, out *lockV1.LockResponse) error {
+func (r *rpc) Release(in *lockV1.Request, out *lockV1.Response) error {
 	r.pl.log.Debug("release request received", "ttl", int(in.GetTtl()), "wait_ttl", int(in.GetWait()), "resource", in.GetResource(), "id", in.GetId())
 
 	if in.GetId() == "" {
@@ -65,7 +65,7 @@ func (r *rpc) Release(in *lockV1.LockRequest, out *lockV1.LockResponse) error {
 	return nil
 }
 
-func (r *rpc) ForceRelease(in *lockV1.LockRequest, out *lockV1.LockResponse) error {
+func (r *rpc) ForceRelease(in *lockV1.Request, out *lockV1.Response) error {
 	r.pl.log.Debug("force release request received", "ttl", int(in.GetTtl()), "wait_ttl", int(in.GetWait()), "resource", in.GetResource(), "id", in.GetId())
 
 	cctx, cancel := waitContext(context.Background(), in.GetWait())
@@ -75,7 +75,7 @@ func (r *rpc) ForceRelease(in *lockV1.LockRequest, out *lockV1.LockResponse) err
 	return nil
 }
 
-func (r *rpc) Exists(in *lockV1.LockRequest, out *lockV1.LockResponse) error {
+func (r *rpc) Exists(in *lockV1.Request, out *lockV1.Response) error {
 	r.pl.log.Debug("exists request received", "ttl", int(in.GetTtl()), "wait_ttl", int(in.GetWait()), "resource", in.GetResource(), "id", in.GetId())
 
 	if in.GetId() == "" {
@@ -89,7 +89,7 @@ func (r *rpc) Exists(in *lockV1.LockRequest, out *lockV1.LockResponse) error {
 	return nil
 }
 
-func (r *rpc) UpdateTTL(in *lockV1.LockRequest, out *lockV1.LockResponse) error {
+func (r *rpc) UpdateTTL(in *lockV1.Request, out *lockV1.Response) error {
 	r.pl.log.Debug("updateTTL request received", "ttl", int(in.GetTtl()), "wait_ttl", int(in.GetWait()), "resource", in.GetResource(), "id", in.GetId())
 
 	if in.GetId() == "" {
