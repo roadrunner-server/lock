@@ -19,14 +19,14 @@ func newLockClient() (*rpc.Client, error) {
 	return rpc.NewClientWithCodec(goridgeRpc.NewClientCodec(conn)), nil
 }
 
-func call(method string, in *lockV1.LockRequest) (bool, error) {
+func call(method string, in *lockV1.Request) (bool, error) {
 	cl, err := newLockClient()
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = cl.Close() }()
 
-	out := &lockV1.LockResponse{}
+	out := &lockV1.Response{}
 	if err := cl.Call(method, in, out); err != nil {
 		return false, err
 	}
@@ -34,7 +34,7 @@ func call(method string, in *lockV1.LockRequest) (bool, error) {
 }
 
 func lock(resource, id string, ttl, wait int) (bool, error) {
-	return call("lock.Lock", &lockV1.LockRequest{
+	return call("lock.Lock", &lockV1.Request{
 		Resource: resource,
 		Id:       id,
 		Ttl:      new(int64(ttl)),
@@ -43,7 +43,7 @@ func lock(resource, id string, ttl, wait int) (bool, error) {
 }
 
 func lockRead(resource, id string, ttl, wait int) (bool, error) {
-	return call("lock.LockRead", &lockV1.LockRequest{
+	return call("lock.LockRead", &lockV1.Request{
 		Resource: resource,
 		Id:       id,
 		Ttl:      new(int64(ttl)),
@@ -52,14 +52,14 @@ func lockRead(resource, id string, ttl, wait int) (bool, error) {
 }
 
 func release(resource, id string) (bool, error) {
-	return call("lock.Release", &lockV1.LockRequest{
+	return call("lock.Release", &lockV1.Request{
 		Resource: resource,
 		Id:       id,
 	})
 }
 
 func updateTTL(resource, id string, ttl int) (bool, error) {
-	return call("lock.UpdateTTL", &lockV1.LockRequest{
+	return call("lock.UpdateTTL", &lockV1.Request{
 		Resource: resource,
 		Id:       id,
 		Ttl:      new(int64(ttl)),
@@ -67,13 +67,13 @@ func updateTTL(resource, id string, ttl int) (bool, error) {
 }
 
 func forceRelease(resource string) (bool, error) {
-	return call("lock.ForceRelease", &lockV1.LockRequest{
+	return call("lock.ForceRelease", &lockV1.Request{
 		Resource: resource,
 	})
 }
 
 func exists(resource, id string) (bool, error) {
-	return call("lock.Exists", &lockV1.LockRequest{
+	return call("lock.Exists", &lockV1.Request{
 		Resource: resource,
 		Id:       id,
 	})
