@@ -8,6 +8,8 @@ Omit the `lock` section to use in-memory locks. Each RoadRunner instance then ha
 
 The memory backend gives the same `ForceRelease` result as Redis: `Ok: true` only if the call removed at least one lock. It removes a released lock a moment after the `Release` reply. Until then `Exists` and `ForceRelease` still report that lock.
 
+Both backends refuse a second read lock with the same ID on the same resource. Use `UpdateTTL` to extend a held lock.
+
 Configure Redis to share locks between RoadRunner instances:
 
 ```yaml
@@ -29,7 +31,7 @@ Optional `dial_timeout`, `read_timeout`, and `write_timeout` settings accept Go 
 ## Redis lock behavior
 
 - `Lock` acquires exclusive access. It can promote a read lock when that caller holds the only read lock. An existing write lock also blocks another acquisition with the same ID.
-- `LockRead` permits multiple readers while the resource has no writer.
+- `LockRead` permits multiple readers while the resource has no writer. An existing read lock blocks another read acquisition with the same ID. A positive wait does not renew that read lock.
 - `Release` removes the lock with the supplied ID.
 - `ForceRelease` removes all locks on the resource. It accepts an empty ID. It returns `Ok: true` only if it removed at least one lock.
 - `Exists` checks the supplied ID. The ID `"*"` checks for any lock on the resource.

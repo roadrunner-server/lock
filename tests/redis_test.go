@@ -77,6 +77,62 @@ func TestRedisReadLockPromotion(t *testing.T) {
 	assert.False(t, reader.GetOk(), "the promoted lock must exclude readers")
 }
 
+// Both backends must refuse a second read lock with the same ID, so that one
+// release frees the resource.
+func TestReadLockReacquireIsRefused(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		cfg   *config.Plugin
+		redis bool
+	}{
+		{name: "memory", cfg: &config.Plugin{Path: "configs/.rr-lock-init.yaml", Flags: []string{"logs.level=error"}}},
+		{name: "redis", cfg: &config.Plugin{Path: "configs/.rr-lock-redis.yaml"}, redis: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.redis {
+				redisAdmin(t, 0)
+			}
+			client, _ := lockRPCClient(t, tt.cfg)
+			resource := t.Name()
+
+			var acquired lockV1.Response
+			require.NoError(t, client.Call("lock.LockRead", &lockV1.Request{Resource: resource, Id: "reader"}, &acquired))
+			require.True(t, acquired.GetOk())
+
+			var again lockV1.Response
+			require.NoError(t, client.Call("lock.LockRead", &lockV1.Request{Resource: resource, Id: "reader"}, &again))
+			assert.False(t, again.GetOk(), "an existing read lock blocks another read acquisition with the same ID")
+
+			var released lockV1.Response
+			require.NoError(t, client.Call("lock.Release", &lockV1.Request{Resource: resource, Id: "reader"}, &released))
+			require.True(t, released.GetOk())
+
+			var writer lockV1.Response
+			require.NoError(t, client.Call("lock.Lock", &lockV1.Request{
+				Resource: resource, Id: "writer", Wait: new(int64(1_000_000)),
+			}, &writer))
+			require.True(t, writer.GetOk(), "one release frees the resource")
+
+			var writerReleased lockV1.Response
+			require.NoError(t, client.Call("lock.Release", &lockV1.Request{Resource: resource, Id: "writer"}, &writerReleased))
+			require.True(t, writerReleased.GetOk())
+
+			// A wait must not renew the caller's own read lock.
+			var short lockV1.Response
+			require.NoError(t, client.Call("lock.LockRead", &lockV1.Request{
+				Resource: resource, Id: "waiter", Ttl: new(int64(300_000)),
+			}, &short))
+			require.True(t, short.GetOk())
+
+			var waited lockV1.Response
+			require.NoError(t, client.Call("lock.LockRead", &lockV1.Request{
+				Resource: resource, Id: "waiter", Ttl: new(int64(300_000)), Wait: new(int64(1_000_000)),
+			}, &waited))
+			assert.False(t, waited.GetOk(), "a waiting caller must not reacquire at its own expiry")
+		})
+	}
+}
+
 func TestRedisConcurrentWriters(t *testing.T) {
 	first, second, _ := redisRPCClients(t)
 	clients := []*rpc.Client{first, second}

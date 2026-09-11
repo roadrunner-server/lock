@@ -35,6 +35,11 @@ if op == 'lock' or op == 'read' then
     local member = 'w:' .. id
     if op == 'read' then
         member = 'r:' .. id
+        -- A read lock with the same ID blocks another read acquisition.
+        -- The caller must not wait for its own member to expire.
+        if redis.call('ZSCORE', key, member) then
+            return {0, -1}
+        end
         if #first == 0 or string.sub(first[1], 1, 2) == 'r:' then
             save(member)
             redis.call('PUBLISH', key, '')

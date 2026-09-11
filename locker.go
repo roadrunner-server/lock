@@ -520,6 +520,16 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 
 		// case when we don't have a writer and have 0 or more readers
 	case r.writerCount.Load() == 0:
+		// a read lock with the same ID blocks another read acquisition
+		if _, held := r.locks.Load(id); held {
+			l.log.Debug("read lock with such ID already exists",
+				"resource", res,
+				"id", id)
+
+			r.resourceMu.unlock()
+			return false
+		}
+
 		l.log.Debug("adding read lock, w==0, r>=0",
 			"resource", res,
 			"id", id)
