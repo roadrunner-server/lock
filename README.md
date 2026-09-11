@@ -6,6 +6,8 @@ The lock plugin provides exclusive and shared locks through the [RoadRunner lock
 
 Omit the `lock` section to use in-memory locks. Each RoadRunner instance then has its own lock state.
 
+The memory backend gives the same `ForceRelease` result as Redis: `Ok: true` only if the call removed at least one lock. It removes a released lock a moment after the `Release` reply. Until then `Exists` and `ForceRelease` still report that lock.
+
 Configure Redis to share locks between RoadRunner instances:
 
 ```yaml
@@ -29,7 +31,7 @@ Optional `dial_timeout`, `read_timeout`, and `write_timeout` settings accept Go 
 - `Lock` acquires exclusive access. It can promote a read lock when that caller holds the only read lock. An existing write lock also blocks another acquisition with the same ID.
 - `LockRead` permits multiple readers while the resource has no writer.
 - `Release` removes the lock with the supplied ID.
-- `ForceRelease` removes all locks on the resource. It accepts an empty ID.
+- `ForceRelease` removes all locks on the resource. It accepts an empty ID. It returns `Ok: true` only if it removed at least one lock.
 - `Exists` checks the supplied ID. The ID `"*"` checks for any lock on the resource.
 - `UpdateTTL` replaces the supplied lock's TTL from the current time. An expired lock cannot be renewed.
 

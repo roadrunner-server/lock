@@ -647,6 +647,15 @@ func (l *locker) forceRelease(ctx context.Context, res string) bool {
 		return false
 	}
 
+	// A resource stays in the map after its last lock ends.
+	// The counters show the live locks.
+	if r.writerCount.Load() == 0 && r.readerCount.Load() == 0 {
+		l.log.Debug("no live locks to force release", "resource", res)
+
+		r.resourceMu.unlockRelease()
+		return false
+	}
+
 	// broadcast release signal
 	r.locks.Range(func(key, value any) bool {
 		k := key.(string)
