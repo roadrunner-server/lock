@@ -72,11 +72,25 @@ Both backends accept a `ttl` and a `wait` from 0 to 9223372036854775 microsecond
 
 RPC TTLs and wait times use microseconds. Each reader has its own TTL. A zero TTL creates a persistent lock. Redis server time controls expiration. The backend stores lock state in one sorted set per resource under the `rr:lock:` prefix. The prefix is fixed. The resource name is the namespace. Give resources unique names when different applications share one Redis server. Lua scripts check ownership and change lock state atomically.
 
-A zero wait makes one acquisition attempt. Redis network timeouts still apply. A positive wait bounds acquisition. Waiting calls use Redis Pub/Sub notifications and expiry timers. Lock contention returns `Ok: false`. Wait expiry while the call waits for a notification also returns `Ok: false`. A Redis command that fails or exceeds its deadline returns an RPC error. The lock state is then unknown. Call `Exists` or `Release` to find the state of the lock.
+Waiting acquisitions use Redis Pub/Sub notifications and expiry timers. See [Wait semantics](#wait-semantics).
 
 All waiting calls of one RoadRunner instance share one Pub/Sub connection. The backend opens that connection with the first waiting call. The backend subscribes to the channel of a resource while a call waits for that resource.
 
 Stopping the plugin cancels waiting calls and closes its Redis client. Stored locks remain available to other RoadRunner instances until release or expiry.
+
+## Wait semantics
+
+The `wait` field is one RPC field, but the six methods do not use it in the same way. The two backends also apply it differently.
+
+`Lock` and `LockRead` use `wait` as the maximum time to wait for the resource. Contention until the wait expires returns `Ok: false`. On Redis a command failure, or a deadline that occurs during a Redis command, returns an RPC error. The lock state is then unknown. Call `Exists` or `Release` to find the state of the lock. A positive wait that is shorter than the Redis round trips of the acquisition returns an RPC error on Redis for this reason, and `Ok: false` on memory.
+
+On Redis, `Release`, `ForceRelease`, `Exists`, and `UpdateTTL` do not wait for the resource. Each of these methods sends one Lua script call, and `wait` is the deadline for that call. If the deadline occurs, the result of the call is unknown, and the method returns an RPC error. `Ok: false` is not correct in this condition, because it reports a definite result, but Redis can apply the command after the deadline.
+
+On the memory backend, `Release`, `ForceRelease`, `Exists`, and `UpdateTTL` use `wait` only as the time limit to get an internal mutex. For valid RPC requests, they return `Ok: false` when this limit expires, and they never return an error.
+
+A `wait` of `0` on the Redis backend makes one acquisition attempt and sets no deadline on the Redis call. The go-redis client then applies its `read_timeout`, which is 5 seconds by default. This lets one Redis call complete on a slow network.
+
+A `wait` of `0` on the memory backend sets a time limit of 1 millisecond. A `Lock` call can thus get a resource that another caller releases in that time.
 
 ## Logging
 

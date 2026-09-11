@@ -598,6 +598,68 @@ func TestRedisZeroWaitAllowsNetworkLatency(t *testing.T) {
 	assert.True(t, acquired.GetOk(), "zero wait must allow one Redis operation to complete")
 }
 
+func TestRedisWaitOnNonAcquireMethods(t *testing.T) {
+	holder, caller, admin := redisRPCClients(t)
+	resource := t.Name()
+	const wait = int64(1_000_000)
+
+	acquire := func() {
+		t.Helper()
+		var acquired lockV1.Response
+		require.NoError(t, holder.Call("lock.Lock", &lockV1.Request{Resource: resource, Id: "owner"}, &acquired))
+		require.True(t, acquired.GetOk())
+	}
+	acquire()
+
+	for _, tt := range []struct {
+		name    string
+		method  string
+		request *lockV1.Request
+		wantOK  bool
+	}{
+		{
+			name: "exists owner", method: "lock.Exists", wantOK: true,
+			request: &lockV1.Request{Resource: resource, Id: "owner", Wait: new(wait)},
+		},
+		{
+			name: "exists foreign id", method: "lock.Exists", wantOK: false,
+			request: &lockV1.Request{Resource: resource, Id: "other", Wait: new(wait)},
+		},
+		{
+			name: "update ttl", method: "lock.UpdateTTL", wantOK: true,
+			request: &lockV1.Request{Resource: resource, Id: "owner", Ttl: new(int64(10_000_000)), Wait: new(wait)},
+		},
+		{
+			name: "release", method: "lock.Release", wantOK: true,
+			request: &lockV1.Request{Resource: resource, Id: "owner", Wait: new(wait)},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var response lockV1.Response
+			require.NoError(t, caller.Call(tt.method, tt.request, &response), "a positive wait must not fail a served command")
+			assert.Equal(t, tt.wantOK, response.GetOk())
+		})
+	}
+
+	acquire()
+	var forced lockV1.Response
+	require.NoError(t, caller.Call("lock.ForceRelease", &lockV1.Request{Resource: resource, Wait: new(wait)}, &forced))
+	assert.True(t, forced.GetOk())
+
+	// A deadline during a Redis command hides the command result.
+	acquire()
+	require.NoError(t, admin.ClientPause(t.Context(), 300*time.Millisecond).Err())
+	var paused lockV1.Response
+	require.Error(t, caller.Call("lock.Exists", &lockV1.Request{
+		Resource: resource, Id: "owner", Wait: new(int64(50_000)),
+	}, &paused), "a wait deadline during a Redis command must report an error")
+	require.NoError(t, admin.ClientUnpause(t.Context()).Err())
+
+	var reread lockV1.Response
+	require.NoError(t, caller.Call("lock.Exists", &lockV1.Request{Resource: resource, Id: "owner", Wait: new(wait)}, &reread))
+	assert.True(t, reread.GetOk(), "a wait deadline must not change the lock state")
+}
+
 func TestRedisStopCancelsWait(t *testing.T) {
 	admin := redisAdmin(t, 0)
 	holder, _ := lockRPCClient(t, &config.Plugin{Path: "configs/.rr-lock-redis.yaml"})
