@@ -72,7 +72,7 @@ Both backends accept a `ttl` and a `wait` from 0 to 9223372036854775 microsecond
 
 RPC TTLs and wait times use microseconds. Each reader has its own TTL. A zero TTL creates a persistent lock. Redis server time controls expiration. The backend stores lock state in one sorted set per resource under the `rr:lock:` prefix. The prefix is fixed. The resource name is the namespace. Give resources unique names when different applications share one Redis server. Lua scripts check ownership and change lock state atomically.
 
-A zero wait makes one acquisition attempt. Redis network timeouts still apply. A positive wait bounds acquisition. Waiting calls use Redis Pub/Sub notifications and expiry timers. Lock contention and wait expiry return `Ok: false`. Redis command failures return RPC errors.
+A zero wait makes one acquisition attempt. Redis network timeouts still apply. A positive wait bounds acquisition. Waiting calls use Redis Pub/Sub notifications and expiry timers. Lock contention returns `Ok: false`. Wait expiry while the call waits for a notification also returns `Ok: false`. A Redis command that fails or exceeds its deadline returns an RPC error. The lock state is then unknown. Call `Exists` or `Release` to find the state of the lock.
 
 Stopping the plugin cancels waiting calls and closes its Redis client. Stored locks remain available to other RoadRunner instances until release or expiry.
 

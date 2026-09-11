@@ -465,6 +465,37 @@ func TestRedisWaitTimeout(t *testing.T) {
 	assert.False(t, exists.GetOk())
 }
 
+func TestRedisAcquireDeadlineDuringCommand(t *testing.T) {
+	redisAdmin(t, 0)
+	proxy := slowRedis(t, 300*time.Millisecond)
+	slow, _ := lockRPCClient(t, &config.Plugin{
+		Type:      "yaml",
+		ReadInCfg: fmt.Appendf(nil, "version: '3'\nlogs: {level: error}\nlock: {driver: redis, config: {addrs: [%q]}}", proxy),
+	})
+	observer, _ := lockRPCClient(t, &config.Plugin{Path: "configs/.rr-lock-redis.yaml"})
+	resource := t.Name()
+
+	// Load the Lua script before the timed call.
+	var warm lockV1.Response
+	require.NoError(t, slow.Call("lock.Exists", &lockV1.Request{Resource: resource, Id: "owner"}, &warm))
+	require.False(t, warm.GetOk())
+
+	var response lockV1.Response
+	err := slow.Call("lock.Lock", &lockV1.Request{
+		Resource: resource, Id: "owner", Wait: new(int64(100_000)),
+	}, &response)
+	require.Error(t, err, "a deadline during a Redis command must reach the caller")
+	require.False(t, response.GetOk())
+
+	var granted lockV1.Response
+	require.NoError(t, observer.Call("lock.Exists", &lockV1.Request{Resource: resource, Id: "owner"}, &granted))
+	assert.True(t, granted.GetOk(), "Redis grants the lock after the caller stops waiting")
+
+	var released lockV1.Response
+	require.NoError(t, observer.Call("lock.Release", &lockV1.Request{Resource: resource, Id: "owner"}, &released))
+	assert.True(t, released.GetOk())
+}
+
 func TestRedisWaitReconnect(t *testing.T) {
 	holder, waiter, admin := redisRPCClients(t)
 	resource := t.Name()

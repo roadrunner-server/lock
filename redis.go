@@ -121,13 +121,13 @@ func (r *redisBackend) acquire(ctx context.Context, op, res, id string, ttl, wai
 	key := "rr:lock:" + res
 	ok, delay, err := r.run(ctx, op, key, id, ttl)
 	if err != nil || ok || delay == redisDuplicateReadDelay || wait <= 0 {
-		return ok, acquisitionError(ctx, err)
+		return ok, err
 	}
 
 	sub := r.client.Subscribe(ctx, key)
 	defer func() { _ = sub.Close() }()
 	if _, err = sub.Receive(ctx); err != nil {
-		return false, acquisitionError(ctx, err)
+		return false, err
 	}
 	// Check lock state when the subscription reconnects.
 	// https://redis.io/docs/latest/develop/pubsub/#delivery-semantics
@@ -137,13 +137,19 @@ func (r *redisBackend) acquire(ctx context.Context, op, res, id string, ttl, wai
 	defer timer.Stop()
 
 	for {
+		// The wait timeout is the only deadline on this context. Expiry here
+		// means contention because no Redis command runs. Cancellation comes
+		// from the plugin stop.
 		if err = ctx.Err(); err != nil {
-			return false, acquisitionError(ctx, err)
+			if errors.Is(err, context.DeadlineExceeded) {
+				return false, nil
+			}
+			return false, err
 		}
 		// Check after subscription confirmation to cover a concurrent release.
 		ok, delay, runErr := r.run(ctx, op, key, id, ttl)
 		if runErr != nil || ok || delay == redisDuplicateReadDelay {
-			return ok, acquisitionError(ctx, runErr)
+			return ok, runErr
 		}
 		var expiry <-chan time.Time
 		if delay > 0 {
@@ -152,17 +158,9 @@ func (r *redisBackend) acquire(ctx context.Context, op, res, id string, ttl, wai
 		}
 		select {
 		case <-ctx.Done():
-			return false, acquisitionError(ctx, ctx.Err())
 		case <-messages:
 		case <-expiry:
 		}
 		timer.Stop()
 	}
-}
-
-func acquisitionError(ctx context.Context, err error) error {
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return nil
-	}
-	return err
 }
