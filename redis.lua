@@ -7,6 +7,8 @@ local now = clock[1] * 1000000 + clock[2]
 
 -- Scores use Redis server time in microseconds.
 -- https://redis.io/docs/latest/commands/time/
+-- The key expiry follows the largest score. An expired member can stay in the set.
+-- Every operation removes the expired members first, so the script always writes.
 redis.call('ZREMRANGEBYSCORE', key, '-inf', string.format('%.0f', now))
 
 local function expireKey()
