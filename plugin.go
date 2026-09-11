@@ -44,15 +44,20 @@ func (p *Plugin) Init(cfg Configurer, log Logger) error {
 	if err := cfg.UnmarshalKey(pluginName, &conf); err != nil {
 		return fmt.Errorf("lock configuration: %w", err)
 	}
-	if conf.Driver != "redis" {
+	switch conf.Driver {
+	case "memory":
+		p.locks = &memoryBackend{locker: newLocker(p.log)}
+		return nil
+	case "redis":
+		locks, err := newRedisBackend(conf.Config)
+		if err != nil {
+			return fmt.Errorf("lock redis: %w", err)
+		}
+		p.locks = locks
+		return nil
+	default:
 		return fmt.Errorf("unsupported lock driver: %q", conf.Driver)
 	}
-	locks, err := newRedisBackend(conf.Config)
-	if err != nil {
-		return fmt.Errorf("lock redis: %w", err)
-	}
-	p.locks = locks
-	return nil
 }
 
 func (p *Plugin) Serve() chan error {

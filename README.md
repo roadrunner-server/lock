@@ -4,7 +4,7 @@ The lock plugin provides exclusive and shared locks through the [RoadRunner lock
 
 ## Backends
 
-Omit the `lock` section to use in-memory locks. Each RoadRunner instance then has its own lock state.
+Omit the `lock` section or set `driver: memory` to use in-memory locks. Each RoadRunner instance then has its own lock state.
 
 The memory backend gives the same `ForceRelease` result as Redis: `Ok: true` only if the call removed at least one lock. It removes a released lock a moment after the `Release` reply. Until then `Exists` and `ForceRelease` still report that lock.
 
@@ -22,11 +22,11 @@ lock:
     db: 0
 ```
 
-The `lock` section requires `driver: redis`. Invalid configuration and connection failures stop plugin initialization.
+The `lock` section requires `driver: memory` or `driver: redis`. Invalid configuration and connection failures stop plugin initialization.
 
-Redis requires version 7 or later. The backend uses `go-redis/v9`. One address selects a standalone client. Multiple addresses select a cluster client. The default address is `127.0.0.1:6379`. Authentication is optional. The default database is `0`.
+Redis requires version 7 or later. The backend uses `go-redis/v9`. One address selects a standalone client. Multiple addresses select a cluster client. The default address is `127.0.0.1:6379`. Authentication is optional. The default database is `0`. The `db` setting applies to one address. A cluster client uses database 0 only. A non-zero `db` with more than one address is rejected at startup.
 
-Optional `dial_timeout`, `read_timeout`, and `write_timeout` settings accept Go durations, such as `5s`. Omitted timeouts use the Redis client defaults.
+Optional `dial_timeout`, `read_timeout`, and `write_timeout` settings accept Go durations, such as `5s`. Omitted timeouts use the Redis client defaults. Negative timeouts are rejected at startup. This includes the values `-1` and `-2`, which the Redis client reads as no timeout. Plugin initialization tests the connection with one `PING` command. The client dials each address up to five times. The `dial_timeout` bounds each attempt and the `read_timeout` bounds the reply.
 
 ## Redis lock behavior
 
@@ -37,7 +37,7 @@ Optional `dial_timeout`, `read_timeout`, and `write_timeout` settings accept Go 
 - `Exists` checks the supplied ID. The ID `"*"` checks for any lock on the resource.
 - `UpdateTTL` replaces the supplied lock's TTL from the current time. An expired lock cannot be renewed.
 
-RPC TTLs and wait times use microseconds. Each reader has its own TTL. A zero TTL creates a persistent lock. Redis server time controls expiration. The backend stores lock state in one sorted set per resource under the `rr:lock:` prefix. Lua scripts check ownership and change lock state atomically.
+RPC TTLs and wait times use microseconds. Each reader has its own TTL. A zero TTL creates a persistent lock. Redis server time controls expiration. The backend stores lock state in one sorted set per resource under the `rr:lock:` prefix. The prefix is fixed. The resource name is the namespace. Give resources unique names when different applications share one Redis server. Lua scripts check ownership and change lock state atomically.
 
 A zero wait makes one acquisition attempt. Redis network timeouts still apply. A positive wait bounds acquisition. Waiting calls use Redis Pub/Sub notifications and expiry timers. Lock contention and wait expiry return `Ok: false`. Redis command failures return RPC errors.
 

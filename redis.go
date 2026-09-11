@@ -23,11 +23,9 @@ type redisBackend struct {
 }
 
 func newRedisBackend(cfg RedisConfig) (*redisBackend, error) {
-	if cfg.Addrs == nil {
-		cfg.Addrs = []string{"127.0.0.1:6379"}
-	}
-	if len(cfg.Addrs) == 0 {
-		return nil, errors.New("redis addrs must not be empty")
+	cfg.InitDefaults()
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
 	client := redis.NewUniversalClient(&redis.UniversalOptions{
 		Addrs:                 cfg.Addrs,
