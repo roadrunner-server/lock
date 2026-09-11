@@ -439,6 +439,69 @@ func TestRedisWait(t *testing.T) {
 	}
 }
 
+func TestRedisWaitersShareOneSubscription(t *testing.T) {
+	admin := redisAdmin(t, 0)
+	client, _ := lockRPCClient(t, &config.Plugin{Path: "configs/.rr-lock-redis.yaml"})
+	resource := t.Name()
+	channel := "rr:lock:" + resource
+
+	var held lockV1.Response
+	require.NoError(t, client.Call("lock.Lock", &lockV1.Request{Resource: resource, Id: "holder"}, &held))
+	require.True(t, held.GetOk())
+
+	const waiters = 5
+	responses := make([]lockV1.Response, waiters)
+	done := make(chan *rpc.Call, waiters)
+	for i := range responses {
+		client.Go("lock.Lock", &lockV1.Request{
+			Resource: resource, Id: fmt.Sprintf("waiter-%d", i), Wait: new(int64(3_000_000)),
+		}, &responses[i], done)
+	}
+
+	subscribers := func() (int64, error) {
+		counts, err := admin.PubSubNumSub(t.Context(), channel).Result()
+		if err != nil {
+			return 0, err
+		}
+		return counts[channel], nil
+	}
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		count, err := subscribers()
+		require.NoError(c, err)
+		require.EqualValues(c, 1, count, "the resource channel needs one subscriber")
+	}, time.Second, 5*time.Millisecond)
+	require.Never(t, func() bool {
+		count, err := subscribers()
+		return err != nil || count != 1
+	}, 200*time.Millisecond, 20*time.Millisecond, "a waiter opened its own subscription")
+
+	var released lockV1.Response
+	require.NoError(t, client.Call("lock.Release", &lockV1.Request{Resource: resource, Id: "holder"}, &released))
+	require.True(t, released.GetOk())
+
+	for range responses {
+		select {
+		case call := <-done:
+			require.NoError(t, call.Error)
+			require.True(t, call.Reply.(*lockV1.Response).GetOk(), "each waiter acquires the released resource")
+			var next lockV1.Response
+			require.NoError(t, client.Call("lock.Release", &lockV1.Request{
+				Resource: resource, Id: call.Args.(*lockV1.Request).GetId(),
+			}, &next))
+			require.True(t, next.GetOk())
+		case <-time.After(2 * time.Second):
+			t.Fatal("a waiter did not acquire the released resource")
+		}
+	}
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		count, err := subscribers()
+		require.NoError(c, err)
+		require.EqualValues(c, 0, count, "the last waiter leaves the resource channel")
+	}, time.Second, 5*time.Millisecond)
+}
+
 func TestRedisWaitTimeout(t *testing.T) {
 	holder, waiter, _ := redisRPCClients(t)
 	resource := t.Name()

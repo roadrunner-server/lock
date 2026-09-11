@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -20,6 +21,18 @@ type redisBackend struct {
 	script *redis.Script
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// mu keeps the Pub/Sub commands in the order of the channel registry updates.
+	mu       sync.Mutex
+	sub      *redis.PubSub
+	channels map[string]*channelWaiters
+}
+
+// channelWaiters holds the acquisitions that wait on one Pub/Sub channel.
+type channelWaiters struct {
+	// ready closes when Redis confirms the subscription.
+	ready chan struct{}
+	wakes map[chan struct{}]struct{}
 }
 
 func newRedisBackend(cfg RedisConfig) (*redisBackend, error) {
@@ -53,7 +66,13 @@ func newRedisBackend(cfg RedisConfig) (*redisBackend, error) {
 		_ = client.Close()
 		return nil, err
 	}
-	return &redisBackend{client: client, script: redis.NewScript(redisScript), ctx: ctx, cancel: cancel}, nil
+	return &redisBackend{
+		client:   client,
+		script:   redis.NewScript(redisScript),
+		ctx:      ctx,
+		cancel:   cancel,
+		channels: make(map[string]*channelWaiters),
+	}, nil
 }
 
 func (r *redisBackend) lock(ctx context.Context, res, id string, ttl, wait int64) (bool, error) {
@@ -82,6 +101,12 @@ func (r *redisBackend) updateTTL(ctx context.Context, res, id string, ttl, wait 
 
 func (r *redisBackend) stop(context.Context) error {
 	r.cancel()
+	r.mu.Lock()
+	sub := r.sub
+	r.mu.Unlock()
+	if sub != nil {
+		_ = sub.Close()
+	}
 	return r.client.Close()
 }
 
@@ -124,14 +149,17 @@ func (r *redisBackend) acquire(ctx context.Context, op, res, id string, ttl, wai
 		return ok, err
 	}
 
-	sub := r.client.Subscribe(ctx, key)
-	defer func() { _ = sub.Close() }()
-	if _, err = sub.Receive(ctx); err != nil {
+	wake := make(chan struct{}, 1)
+	ready, err := r.addWaiter(key, wake)
+	if err != nil {
 		return false, err
 	}
-	// Check lock state when the subscription reconnects.
-	// https://redis.io/docs/latest/develop/pubsub/#delivery-semantics
-	messages := sub.ChannelWithSubscriptions()
+	defer r.removeWaiter(key, wake)
+	// The loop maps an expired wait after this select.
+	select {
+	case <-ready:
+	case <-ctx.Done():
+	}
 	timer := time.NewTimer(0)
 	timer.Stop()
 	defer timer.Stop()
@@ -158,9 +186,106 @@ func (r *redisBackend) acquire(ctx context.Context, op, res, id string, ttl, wai
 		}
 		select {
 		case <-ctx.Done():
-		case <-messages:
+		case <-wake:
 		case <-expiry:
 		}
 		timer.Stop()
+	}
+}
+
+// addWaiter registers wake for the channel and subscribes the shared connection on the first waiter.
+// The returned channel closes when Redis confirms the subscription.
+func (r *redisBackend) addWaiter(channel string, wake chan struct{}) (<-chan struct{}, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.ctx.Err(); err != nil {
+		return nil, err
+	}
+	if r.sub == nil {
+		r.sub = r.client.Subscribe(r.ctx)
+		go r.dispatch(r.sub.ChannelWithSubscriptions())
+	}
+	if registered, subscribed := r.channels[channel]; subscribed {
+		registered.wakes[wake] = struct{}{}
+		return registered.ready, nil
+	}
+	waiters := &channelWaiters{
+		ready: make(chan struct{}),
+		wakes: map[chan struct{}]struct{}{wake: {}},
+	}
+	// The caller context can expire, so the backend context bounds the command.
+	if err := r.sub.Subscribe(r.ctx, channel); err != nil {
+		// A failed subscribe keeps the channel in the client subscription set.
+		_ = r.sub.Unsubscribe(r.ctx, channel)
+		return nil, err
+	}
+	r.channels[channel] = waiters
+	return waiters.ready, nil
+}
+
+// removeWaiter drops wake and unsubscribes the shared connection when the last waiter leaves.
+func (r *redisBackend) removeWaiter(channel string, wake chan struct{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	waiters, subscribed := r.channels[channel]
+	if !subscribed {
+		return
+	}
+	delete(waiters.wakes, wake)
+	if len(waiters.wakes) > 0 {
+		return
+	}
+	delete(r.channels, channel)
+	_ = r.sub.Unsubscribe(r.ctx, channel)
+}
+
+// dispatch sends the messages of the shared connection to the waiters of each channel.
+// It returns when stop closes the connection.
+func (r *redisBackend) dispatch(messages <-chan any) {
+	for message := range messages {
+		switch message := message.(type) {
+		case *redis.Message:
+			r.wakeWaiters(message.Channel)
+		case *redis.Subscription:
+			// A reconnected subscription can miss messages.
+			// https://redis.io/docs/latest/develop/pubsub/#delivery-semantics
+			if message.Kind == "subscribe" && r.confirmSubscription(message.Channel) {
+				r.wakeWaiters(message.Channel)
+			}
+		}
+	}
+}
+
+// confirmSubscription marks the channel as active.
+// It reports true when Redis confirms the channel again, which happens after a reconnect.
+func (r *redisBackend) confirmSubscription(channel string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	waiters, subscribed := r.channels[channel]
+	if !subscribed {
+		return false
+	}
+	select {
+	case <-waiters.ready:
+		return true
+	default:
+		close(waiters.ready)
+		return false
+	}
+}
+
+// wakeWaiters signals every acquisition that waits on the channel.
+func (r *redisBackend) wakeWaiters(channel string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	waiters, subscribed := r.channels[channel]
+	if !subscribed {
+		return
+	}
+	for wake := range waiters.wakes {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
 	}
 }
