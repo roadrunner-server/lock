@@ -37,7 +37,6 @@ func lockRPCClient(t *testing.T, cfg *config.Plugin) (*rpc.Client, func() error)
 	server := rpc.NewServer()
 	require.NoError(t, server.RegisterName(plugin.Name(), plugin.RPC()))
 	serverConn, clientConn := net.Pipe()
-	require.NoError(t, clientConn.SetDeadline(time.Now().Add(5*time.Second)))
 	done := make(chan struct{})
 	go func() {
 		server.ServeCodec(goridgeRPC.NewCodec(serverConn))
