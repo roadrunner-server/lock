@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	lockV1 "github.com/roadrunner-server/api-go/v6/lock/v1"
 	"github.com/roadrunner-server/config/v6"
 	"github.com/stretchr/testify/assert"
@@ -147,7 +148,7 @@ func TestRedisWaitIdleSubscription(t *testing.T) {
 
 func TestRedisWaitReconnectAfterLostPubSubReplies(t *testing.T) {
 	admin := redisAdmin(t, 0)
-	proxy, dropReplies := redisPubSubProxy(t)
+	proxy, dropReplies := redisPubSubProxy(t, 0)
 	holder, _ := lockRPCClient(t, &config.Plugin{Path: "configs/.rr-lock-redis.yaml"})
 	waiter, _ := lockRPCClient(t, &config.Plugin{
 		Type: "yaml",
@@ -158,28 +159,14 @@ func TestRedisWaitReconnectAfterLostPubSubReplies(t *testing.T) {
 	var held lockV1.Response
 	require.NoError(t, holder.Call("lock.Lock", &lockV1.Request{Resource: resource, Id: "holder"}, &held))
 	require.True(t, held.GetOk())
-	scriptCalls := func() uint64 {
-		stats, err := admin.Info(t.Context(), "commandstats").Result()
-		require.NoError(t, err)
-		for line := range strings.SplitSeq(stats, "\r\n") {
-			if stats, found := strings.CutPrefix(line, "cmdstat_evalsha:calls="); found {
-				calls, _, _ := strings.Cut(stats, ",")
-				count, err := strconv.ParseUint(calls, 10, 64)
-				require.NoError(t, err)
-				return count
-			}
-		}
-		t.Fatal("Redis did not report the acquisition script calls")
-		return 0
-	}
-	before := scriptCalls()
+	before := redisScriptCalls(t, admin)
 	var acquired lockV1.Response
 	pending := waiter.Go("lock.Lock", &lockV1.Request{
 		Resource: resource, Id: "waiter", Wait: new(int64(12_000_000)),
 	}, &acquired, nil)
 	waitForSubscriber(t, admin, resource)
 	// Both acquisition checks must observe the held lock before replies are lost.
-	require.Eventually(t, func() bool { return scriptCalls() >= before+2 }, time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return redisScriptCalls(t, admin) >= before+2 }, time.Second, 5*time.Millisecond)
 	dropReplies()
 	// The old TCP connection stays open while its notifications and PONGs are lost.
 	var released lockV1.Response
@@ -194,8 +181,66 @@ func TestRedisWaitReconnectAfterLostPubSubReplies(t *testing.T) {
 	}
 }
 
-// redisPubSubProxy can drop replies on the current Pub/Sub connection while forwarding new connections.
-func redisPubSubProxy(t *testing.T) (string, func()) {
+func TestRedisWaitFragmentedNotification(t *testing.T) {
+	admin := redisAdmin(t, 0)
+	proxy, _ := redisPubSubProxy(t, 3500*time.Millisecond)
+	holder, _ := lockRPCClient(t, &config.Plugin{Path: "configs/.rr-lock-redis.yaml"})
+	waiter, _ := lockRPCClient(t, &config.Plugin{
+		Type: "yaml",
+		ReadInCfg: fmt.Appendf(nil,
+			"version: '3'\nlogs: {level: error}\nlock: {driver: redis, config: {addrs: [%q]}}", proxy),
+	})
+	resource := t.Name()
+	var held lockV1.Response
+	require.NoError(t, holder.Call("lock.Lock", &lockV1.Request{Resource: resource, Id: "holder"}, &held))
+	require.True(t, held.GetOk())
+	before := redisScriptCalls(t, admin)
+	var acquired lockV1.Response
+	pending := waiter.Go("lock.Lock", &lockV1.Request{
+		Resource: resource, Id: "waiter", Wait: new(int64(8_000_000)),
+	}, &acquired, nil)
+	waitForSubscriber(t, admin, resource)
+	// The notification must arrive after both acquisition checks observe contention.
+	require.Eventually(t, func() bool { return redisScriptCalls(t, admin) >= before+2 }, time.Second, 5*time.Millisecond)
+	clients, err := admin.Do(t.Context(), "CLIENT", "LIST", "TYPE", "pubsub").Text()
+	require.NoError(t, err)
+	fields := strings.Fields(clients)
+	require.NotEmpty(t, fields)
+	connection := fields[0]
+
+	var released lockV1.Response
+	require.NoError(t, holder.Call("lock.Release", &lockV1.Request{Resource: resource, Id: "holder"}, &released))
+	require.True(t, released.GetOk())
+	select {
+	case call := <-pending.Done:
+		require.NoError(t, call.Error)
+		require.True(t, acquired.GetOk(), "a fragmented release notification must wake the waiting RPC")
+	case <-time.After(9 * time.Second):
+		t.Fatal("the fragmented release notification did not complete the waiting RPC")
+	}
+	clients, err = admin.ClientList(t.Context()).Result()
+	require.NoError(t, err)
+	require.Contains(t, clients, connection+" ", "the healthy subscription must survive a fragmented notification")
+}
+
+func redisScriptCalls(t *testing.T, admin *redis.Client) uint64 {
+	t.Helper()
+	stats, err := admin.Info(t.Context(), "commandstats").Result()
+	require.NoError(t, err)
+	for line := range strings.SplitSeq(stats, "\r\n") {
+		if stats, found := strings.CutPrefix(line, "cmdstat_evalsha:calls="); found {
+			calls, _, _ := strings.Cut(stats, ",")
+			count, err := strconv.ParseUint(calls, 10, 64)
+			require.NoError(t, err)
+			return count
+		}
+	}
+	t.Fatal("Redis did not report the acquisition script calls")
+	return 0
+}
+
+// redisPubSubProxy can drop replies or pause notifications after the message field.
+func redisPubSubProxy(t *testing.T, fragmentDelay time.Duration) (string, func()) {
 	t.Helper()
 	var listen net.ListenConfig
 	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -249,6 +294,15 @@ func redisPubSubProxy(t *testing.T) (string, func()) {
 					if len(line) > 0 && !current.blocked.Load() {
 						if _, writeErr := caller.Write(line); writeErr != nil {
 							return
+						}
+						if fragmentDelay > 0 && current.pubsub.Load() && string(line) == "message\r\n" {
+							timer := time.NewTimer(fragmentDelay)
+							select {
+							case <-ctx.Done():
+								timer.Stop()
+								return
+							case <-timer.C:
+							}
 						}
 					}
 					if err != nil {

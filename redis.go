@@ -4,7 +4,6 @@ import (
 	"context"
 	_ "embed"
 	"errors"
-	"net"
 	"sync"
 	"time"
 
@@ -259,6 +258,14 @@ func (r *redisBackend) removeWaiter(channel string, waiters *channelWaiters, wak
 
 // dispatch receives notifications and server errors from one shared connection.
 func (r *redisBackend) dispatch(sub *redis.PubSub) {
+	ctx, cancel := context.WithCancel(r.ctx)
+	var health sync.WaitGroup
+	health.Go(func() { r.pingSubscription(ctx, sub) })
+	defer func() {
+		cancel()
+		health.Wait()
+	}()
+
 	retry := time.NewTimer(0)
 	retry.Stop()
 	defer retry.Stop()
@@ -294,20 +301,26 @@ func (r *redisBackend) dispatch(sub *redis.PubSub) {
 	}
 }
 
-// receive probes an idle connection and bounds the health reply with a backend deadline.
+// receive invalidates the connection if a bounded read cannot finish.
 func (r *redisBackend) receive(sub *redis.PubSub) (any, error) {
-	message, err := sub.ReceiveTimeout(r.ctx, redisSubscriptionHealthInterval)
-	timeout, ok := errors.AsType[net.Error](err)
-	if r.ctx.Err() != nil || !ok || !timeout.Timeout() {
-		return message, err
-	}
-	if err = sub.Ping(r.ctx); err != nil {
-		return nil, err
-	}
-	ctx, cancel := context.WithTimeout(r.ctx, redisSubscriptionHealthInterval)
+	ctx, cancel := context.WithTimeout(r.ctx, 2*redisSubscriptionHealthInterval)
 	defer cancel()
-	// Receive treats a missing health reply as a broken connection and reconnects.
 	return sub.Receive(ctx)
+}
+
+// pingSubscription checks health without interrupting an in-progress RESP read.
+func (r *redisBackend) pingSubscription(ctx context.Context, sub *redis.PubSub) {
+	ticker := time.NewTicker(redisSubscriptionHealthInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Ping reconnects on write errors; Receive consumes its reply.
+			_ = sub.Ping(ctx)
+		}
+	}
 }
 
 // failSubscriptions reports a server error to every group on the failed connection.
