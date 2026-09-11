@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ const redisSubscriptionHealthInterval = 3 * time.Second
 var redisScript string
 
 type redisBackend struct {
+	log    *slog.Logger
 	client redis.UniversalClient
 	script *redis.Script
 	ctx    context.Context
@@ -42,7 +44,7 @@ type channelWaiters struct {
 	err    error
 }
 
-func newRedisBackend(cfg RedisConfig) (*redisBackend, error) {
+func newRedisBackend(log *slog.Logger, cfg RedisConfig) (*redisBackend, error) {
 	cfg.InitDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -73,7 +75,9 @@ func newRedisBackend(cfg RedisConfig) (*redisBackend, error) {
 		_ = client.Close()
 		return nil, err
 	}
+	log.Info("lock backend initialized", "driver", "redis", "addrs", cfg.Addrs, "db", cfg.DB)
 	return &redisBackend{
+		log:      log,
 		client:   client,
 		script:   redis.NewScript(redisScript),
 		ctx:      ctx,
@@ -143,6 +147,10 @@ func (r *redisBackend) operate(ctx context.Context, op, res, id string, ttl, wai
 func (r *redisBackend) run(ctx context.Context, op, key, id string, ttl int64) (bool, time.Duration, error) {
 	values, err := r.script.Run(ctx, r.client, []string{key}, op, id, ttl).Int64Slice()
 	if err != nil {
+		// A request context that ends during the call reports the wait outcome, not a Redis failure.
+		if ctx.Err() == nil {
+			r.log.Error("redis lock script failed", "op", op, "key", key, "id", id, "error", err)
+		}
 		return false, 0, err
 	}
 	return values[0] == 1, time.Duration(values[1]) * time.Microsecond, nil
@@ -232,6 +240,7 @@ func (r *redisBackend) addWaiter(channel string, wake chan struct{}) (*channelWa
 	}
 	// The caller context can expire, so the backend context bounds the command.
 	if err := r.sub.Subscribe(r.ctx, channel); err != nil {
+		r.log.Error("redis lock subscribe failed", "channel", channel, "error", err)
 		// A failed subscribe keeps the channel in the client subscription set.
 		_ = r.sub.Unsubscribe(r.ctx, channel)
 		return nil, err
@@ -295,6 +304,7 @@ func (r *redisBackend) dispatch(sub *redis.PubSub) {
 			// A reconnected subscription can miss messages.
 			// https://redis.io/docs/latest/develop/pubsub/#delivery-semantics
 			if message.Kind == "subscribe" && r.confirmSubscription(message.Channel) {
+				r.log.Warn("redis lock subscription reconnected", "channel", message.Channel)
 				r.wakeWaiters(message.Channel)
 			}
 		}
@@ -334,7 +344,8 @@ func (r *redisBackend) failSubscriptions(sub *redis.PubSub, err error) {
 	// Close before replacement so queued errors cannot reach a new subscription.
 	_ = sub.Close()
 	r.sub = nil
-	for _, waiters := range r.channels {
+	for channel, waiters := range r.channels {
+		r.log.Error("redis lock subscribe failed", "channel", channel, "error", err)
 		waiters.err = err
 		close(waiters.failed)
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/rpc"
 	"strconv"
@@ -43,12 +44,13 @@ func TestRedisSubscribeError(t *testing.T) {
 			})
 
 			holder, _ := lockRPCClient(t, &config.Plugin{Path: "configs/.rr-lock-redis.yaml"})
-			waiter, _ := lockRPCClient(t, &config.Plugin{
+			cont, plugin, logs := observedLockContainer(t, &config.Plugin{
 				Type: "yaml",
 				ReadInCfg: fmt.Appendf(nil,
 					"version: '3'\nlogs: {level: error}\nlock: {driver: redis, config: {addrs: [%q], username: %q, password: %q}}",
 					redisAddr(), username, username),
 			})
+			waiter, _ := serveLockRPC(t, cont, plugin)
 			clients, err := admin.ClientList(t.Context()).Result()
 			require.NoError(t, err)
 			require.Contains(t, clients, "user="+username+" ", "the RPC backend must authenticate as the restricted user")
@@ -81,6 +83,16 @@ func TestRedisSubscribeError(t *testing.T) {
 				case <-time.After(time.Second):
 					t.Fatal("subscription rejection did not reach the waiting RPC")
 				}
+			}
+
+			entries := logs.FilterMessage("redis lock subscribe failed").All()
+			require.NotEmpty(t, entries, "a server-side subscription rejection must be logged")
+			for _, entry := range entries {
+				assert.Equal(t, slog.LevelError, entry.Level)
+				assert.Equal(t, "rr:lock:"+resource, entry.Attrs["channel"])
+				failure, ok := entry.Attrs["error"].(error)
+				require.True(t, ok)
+				assert.ErrorContains(t, failure, "NOPERM")
 			}
 
 			require.EventuallyWithT(t, func(c *assert.CollectT) {

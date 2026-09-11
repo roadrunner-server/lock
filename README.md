@@ -78,6 +78,16 @@ All waiting calls of one RoadRunner instance share one Pub/Sub connection. The b
 
 Stopping the plugin cancels waiting calls and closes its Redis client. Stored locks remain available to other RoadRunner instances until release or expiry.
 
+## Logging
+
+The plugin writes one `lock backend initialized` message at the info level when it selects a backend. The message reports the driver. The Redis driver also reports the configured addresses and the database.
+
+The Redis backend reports a failed lock script at the error level. The message reports the operation, the Redis key, and the lock ID. An expired wait bound is not a failure and is not reported.
+
+The Redis backend reports a failed Pub/Sub subscribe at the error level. The message reports the channel.
+
+The Redis backend reports a Pub/Sub subscription that is established again after a reconnect at the warning level. The message reports the channel.
+
 ## Tests
 
 Start a test Redis instance:

@@ -37,6 +37,7 @@ func (p *Plugin) Init(cfg Configurer, log Logger) error {
 	p.log = log.NamedLogger(pluginName)
 	if !cfg.Has(pluginName) {
 		p.locks = &memoryBackend{locker: newLocker(p.log)}
+		p.log.Info("lock backend initialized", "driver", "memory")
 		return nil
 	}
 
@@ -47,9 +48,10 @@ func (p *Plugin) Init(cfg Configurer, log Logger) error {
 	switch conf.Driver {
 	case "memory":
 		p.locks = &memoryBackend{locker: newLocker(p.log)}
+		p.log.Info("lock backend initialized", "driver", "memory")
 		return nil
 	case "redis":
-		locks, err := newRedisBackend(conf.Config)
+		locks, err := newRedisBackend(p.log, conf.Config)
 		if err != nil {
 			return fmt.Errorf("lock redis: %w", err)
 		}

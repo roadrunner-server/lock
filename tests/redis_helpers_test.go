@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	mocklogger "tests/mock"
+
 	"github.com/redis/go-redis/v9"
 	"github.com/roadrunner-server/config/v6"
 	"github.com/roadrunner-server/endure/v2"
@@ -29,9 +31,23 @@ func lockContainer(t *testing.T, cfg *config.Plugin) (*endure.Endure, *lockPlugi
 	return cont, plugin
 }
 
+func observedLockContainer(t *testing.T, cfg *config.Plugin) (*endure.Endure, *lockPlugin.Plugin, *mocklogger.ObservedLogs) {
+	t.Helper()
+	cont := endure.New(slog.LevelError)
+	plugin := &lockPlugin.Plugin{}
+	log, logs := mocklogger.SlogTestLogger(slog.LevelDebug)
+	require.NoError(t, cont.RegisterAll(cfg, log, plugin))
+	return cont, plugin, logs
+}
+
 func lockRPCClient(t *testing.T, cfg *config.Plugin) (*rpc.Client, func() error) {
 	t.Helper()
 	cont, plugin := lockContainer(t, cfg)
+	return serveLockRPC(t, cont, plugin)
+}
+
+func serveLockRPC(t *testing.T, cont *endure.Endure, plugin *lockPlugin.Plugin) (*rpc.Client, func() error) {
+	t.Helper()
 	require.NoError(t, cont.Init())
 	stop := sync.OnceValue(cont.Stop)
 
