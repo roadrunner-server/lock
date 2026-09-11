@@ -59,6 +59,8 @@ Write at least one key in the `tls` block. The configuration reader drops a bloc
 
 The `max_retries` key of the RoadRunner Redis plugin is absent. The backend keeps retries off, because a retry after a lost reply reports contention for a lock that the caller now holds. The `route_by_latency`, `route_randomly`, and `read_only` keys are absent, because the lock script writes and must run on the master. The `min_retry_backoff`, `max_retry_backoff`, `min_idle_conns`, `max_conn_age`, `pool_timeout`, `idle_timeout`, and `idle_check_freq` keys are absent as well.
 
+Both backends accept a `ttl` and a `wait` from 0 to 9223372036854775 microseconds. That limit is the largest microsecond count which fits a Go duration. `Lock`, `LockRead`, and `UpdateTTL` reject a `ttl` outside this range. All methods reject a `wait` outside this range. A rejected request returns an RPC error and changes no lock state.
+
 ## Redis lock behavior
 
 - `Lock` acquires exclusive access. It can promote a read lock when that caller holds the only read lock. An existing write lock also blocks another acquisition with the same ID.
