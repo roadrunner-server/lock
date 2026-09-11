@@ -27,11 +27,19 @@ func newRedisBackend(cfg RedisConfig) (*redisBackend, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	tlsConf, err := tlsConfig(cfg.TLSConfig)
+	if err != nil {
+		return nil, err
+	}
 	client := redis.NewUniversalClient(&redis.UniversalOptions{
 		Addrs:                 cfg.Addrs,
 		Username:              cfg.Username,
 		Password:              cfg.Password,
 		DB:                    cfg.DB,
+		MasterName:            cfg.MasterName,
+		SentinelPassword:      cfg.SentinelPassword,
+		PoolSize:              cfg.PoolSize,
+		TLSConfig:             tlsConf,
 		DialTimeout:           cfg.DialTimeout,
 		ReadTimeout:           cfg.ReadTimeout,
 		WriteTimeout:          cfg.WriteTimeout,

@@ -99,6 +99,70 @@ func TestRedisInitializationError(t *testing.T) {
 	}
 }
 
+func TestRedisConnectionSettings(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		section string
+		wantErr string
+	}{
+		{
+			name:    "negative pool size",
+			section: "lock: {driver: redis, config: {addrs: [127.0.0.1:1], pool_size: -1}}",
+			wantErr: "pool_size must not be negative",
+		},
+		{
+			name:    "certificate without key",
+			section: "lock: {driver: redis, config: {addrs: [127.0.0.1:1], tls: {cert: /rr-lock/client.pem}}}",
+			wantErr: "cert and key must be set together",
+		},
+		{
+			name:    "key without certificate",
+			section: "lock: {driver: redis, config: {addrs: [127.0.0.1:1], tls: {key: /rr-lock/client.key}}}",
+			wantErr: "cert and key must be set together",
+		},
+		{
+			name:    "missing root certificate authority",
+			section: "lock: {driver: redis, config: {addrs: [127.0.0.1:1], tls: {root_ca: /rr-lock/missing-ca.pem}}}",
+			wantErr: "/rr-lock/missing-ca.pem",
+		},
+		{
+			name:    "unreachable sentinel",
+			section: "lock: {driver: redis, config: {addrs: [127.0.0.1:1], dial_timeout: 50ms, master_name: mymaster}}",
+			wantErr: "sentinels",
+		},
+		{
+			name:    "sentinel selects a database",
+			section: "lock: {driver: redis, config: {addrs: [127.0.0.1:1, 127.0.0.1:2], dial_timeout: 50ms, master_name: mymaster, db: 1}}",
+			wantErr: "sentinels",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cont, _ := lockContainer(t, &config.Plugin{
+				Type: "yaml", ReadInCfg: []byte("version: '3'\nlogs: {level: error}\n" + tt.section),
+			})
+			err := cont.Init()
+			if err == nil {
+				t.Cleanup(func() { assert.NoError(t, cont.Stop()) })
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestRedisTLSRequiresSecureServer(t *testing.T) {
+	plaintext, _ := lockContainer(t, &config.Plugin{Path: "configs/.rr-lock-redis.yaml"})
+	require.NoError(t, plaintext.Init(), "the test Redis must accept a plaintext connection")
+	t.Cleanup(func() { assert.NoError(t, plaintext.Stop()) })
+
+	cont, _ := lockContainer(t, &config.Plugin{Path: "configs/.rr-lock-redis-tls.yaml"})
+	err := cont.Init()
+	if err == nil {
+		t.Cleanup(func() { assert.NoError(t, cont.Stop()) })
+	}
+	require.Error(t, err, "the tls block must make the client negotiate TLS")
+	require.NotContains(t, err.Error(), "connection refused", "the test Redis must be reachable")
+}
+
 func TestRedisDatabaseSelection(t *testing.T) {
 	redisAdmin(t, 1)
 	databaseOne := &config.Plugin{Path: "configs/.rr-lock-redis.yaml", Flags: []string{"lock.config.db=1"}}

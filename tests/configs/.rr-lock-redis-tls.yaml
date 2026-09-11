@@ -1,0 +1,14 @@
+version: '3'
+
+logs:
+  level: error
+
+lock:
+  driver: redis
+  config:
+    addrs:
+      - "${RR_LOCK_REDIS_ADDR:-127.0.0.1:16379}"
+    dial_timeout: 200ms
+    # An empty root_ca selects the system root certificates.
+    tls:
+      root_ca: ""
