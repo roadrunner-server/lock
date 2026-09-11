@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"net"
 	"sync"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 
 // redisDuplicateReadDelay is the Lua sentinel for terminal read refusal.
 const redisDuplicateReadDelay = -2 * time.Microsecond
+
+const redisSubscriptionHealthInterval = 3 * time.Second
 
 //go:embed redis.lua
 var redisScript string
@@ -23,9 +26,10 @@ type redisBackend struct {
 	cancel context.CancelFunc
 
 	// mu keeps the Pub/Sub commands in the order of the channel registry updates.
-	mu       sync.Mutex
-	sub      *redis.PubSub
-	channels map[string]*channelWaiters
+	mu        sync.Mutex
+	sub       *redis.PubSub
+	channels  map[string]*channelWaiters
+	receivers sync.WaitGroup
 }
 
 // channelWaiters holds the acquisitions that wait on one Pub/Sub channel.
@@ -33,6 +37,10 @@ type channelWaiters struct {
 	// ready closes when Redis confirms the subscription.
 	ready chan struct{}
 	wakes map[chan struct{}]struct{}
+
+	// err is published by closing failed.
+	failed chan struct{}
+	err    error
 }
 
 func newRedisBackend(cfg RedisConfig) (*redisBackend, error) {
@@ -107,6 +115,7 @@ func (r *redisBackend) stop(context.Context) error {
 	if sub != nil {
 		_ = sub.Close()
 	}
+	r.receivers.Wait()
 	return r.client.Close()
 }
 
@@ -150,14 +159,15 @@ func (r *redisBackend) acquire(ctx context.Context, op, res, id string, ttl, wai
 	}
 
 	wake := make(chan struct{}, 1)
-	ready, err := r.addWaiter(key, wake)
+	waiters, err := r.addWaiter(key, wake)
 	if err != nil {
 		return false, err
 	}
-	defer r.removeWaiter(key, wake)
+	defer r.removeWaiter(key, waiters, wake)
 	// The loop maps an expired wait after this select.
 	select {
-	case <-ready:
+	case <-waiters.ready:
+	case <-waiters.failed:
 	case <-ctx.Done():
 	}
 	timer := time.NewTimer(0)
@@ -165,6 +175,11 @@ func (r *redisBackend) acquire(ctx context.Context, op, res, id string, ttl, wai
 	defer timer.Stop()
 
 	for {
+		select {
+		case <-waiters.failed:
+			return false, waiters.err
+		default:
+		}
 		// The wait timeout is the only deadline on this context. Expiry here
 		// means contention because no Redis command runs. Cancellation comes
 		// from the plugin stop.
@@ -186,6 +201,7 @@ func (r *redisBackend) acquire(ctx context.Context, op, res, id string, ttl, wai
 		}
 		select {
 		case <-ctx.Done():
+		case <-waiters.failed:
 		case <-wake:
 		case <-expiry:
 		}
@@ -194,24 +210,26 @@ func (r *redisBackend) acquire(ctx context.Context, op, res, id string, ttl, wai
 }
 
 // addWaiter registers wake for the channel and subscribes the shared connection on the first waiter.
-// The returned channel closes when Redis confirms the subscription.
-func (r *redisBackend) addWaiter(channel string, wake chan struct{}) (<-chan struct{}, error) {
+// The returned group reports subscription confirmation and receiver failure.
+func (r *redisBackend) addWaiter(channel string, wake chan struct{}) (*channelWaiters, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.ctx.Err(); err != nil {
 		return nil, err
 	}
 	if r.sub == nil {
-		r.sub = r.client.Subscribe(r.ctx)
-		go r.dispatch(r.sub.ChannelWithSubscriptions())
+		sub := r.client.Subscribe(r.ctx)
+		r.sub = sub
+		r.receivers.Go(func() { r.dispatch(sub) })
 	}
 	if registered, subscribed := r.channels[channel]; subscribed {
 		registered.wakes[wake] = struct{}{}
-		return registered.ready, nil
+		return registered, nil
 	}
 	waiters := &channelWaiters{
-		ready: make(chan struct{}),
-		wakes: map[chan struct{}]struct{}{wake: {}},
+		ready:  make(chan struct{}),
+		wakes:  map[chan struct{}]struct{}{wake: {}},
+		failed: make(chan struct{}),
 	}
 	// The caller context can expire, so the backend context bounds the command.
 	if err := r.sub.Subscribe(r.ctx, channel); err != nil {
@@ -220,15 +238,15 @@ func (r *redisBackend) addWaiter(channel string, wake chan struct{}) (<-chan str
 		return nil, err
 	}
 	r.channels[channel] = waiters
-	return waiters.ready, nil
+	return waiters, nil
 }
 
 // removeWaiter drops wake and unsubscribes the shared connection when the last waiter leaves.
-func (r *redisBackend) removeWaiter(channel string, wake chan struct{}) {
+func (r *redisBackend) removeWaiter(channel string, waiters *channelWaiters, wake chan struct{}) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	waiters, subscribed := r.channels[channel]
-	if !subscribed {
+	// A failed receiver can leave a replacement group on this channel.
+	if r.channels[channel] != waiters {
 		return
 	}
 	delete(waiters.wakes, wake)
@@ -239,10 +257,30 @@ func (r *redisBackend) removeWaiter(channel string, wake chan struct{}) {
 	_ = r.sub.Unsubscribe(r.ctx, channel)
 }
 
-// dispatch sends the messages of the shared connection to the waiters of each channel.
-// It returns when stop closes the connection.
-func (r *redisBackend) dispatch(messages <-chan any) {
-	for message := range messages {
+// dispatch receives notifications and server errors from one shared connection.
+func (r *redisBackend) dispatch(sub *redis.PubSub) {
+	retry := time.NewTimer(0)
+	retry.Stop()
+	defer retry.Stop()
+	for r.ctx.Err() == nil {
+		message, err := r.receive(sub)
+		if err != nil {
+			if r.ctx.Err() != nil || errors.Is(err, redis.ErrClosed) {
+				return
+			}
+			if _, serverError := errors.AsType[redis.Error](err); serverError {
+				r.failSubscriptions(sub, err)
+				return
+			}
+			// Receive reconnects after transport errors. Bound repeated dial failures.
+			retry.Reset(100 * time.Millisecond)
+			select {
+			case <-r.ctx.Done():
+				return
+			case <-retry.C:
+			}
+			continue
+		}
 		switch message := message.(type) {
 		case *redis.Message:
 			r.wakeWaiters(message.Channel)
@@ -254,6 +292,40 @@ func (r *redisBackend) dispatch(messages <-chan any) {
 			}
 		}
 	}
+}
+
+// receive probes an idle connection and bounds the health reply with a backend deadline.
+func (r *redisBackend) receive(sub *redis.PubSub) (any, error) {
+	message, err := sub.ReceiveTimeout(r.ctx, redisSubscriptionHealthInterval)
+	timeout, ok := errors.AsType[net.Error](err)
+	if r.ctx.Err() != nil || !ok || !timeout.Timeout() {
+		return message, err
+	}
+	if err = sub.Ping(r.ctx); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(r.ctx, redisSubscriptionHealthInterval)
+	defer cancel()
+	// Receive treats a missing health reply as a broken connection and reconnects.
+	return sub.Receive(ctx)
+}
+
+// failSubscriptions reports a server error to every group on the failed connection.
+// Redis error replies have no channel identifier.
+func (r *redisBackend) failSubscriptions(sub *redis.PubSub, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sub != sub {
+		return
+	}
+	// Close before replacement so queued errors cannot reach a new subscription.
+	_ = sub.Close()
+	r.sub = nil
+	for _, waiters := range r.channels {
+		waiters.err = err
+		close(waiters.failed)
+	}
+	clear(r.channels)
 }
 
 // confirmSubscription marks the channel as active.
