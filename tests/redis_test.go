@@ -133,6 +133,59 @@ func TestReadLockReacquireIsRefused(t *testing.T) {
 	}
 }
 
+func TestRedisReadLockReacquireAfterExpiryNotificationIsRefused(t *testing.T) {
+	owner, other, admin := redisRPCClients(t)
+	resource := t.Name()
+	var held lockV1.Response
+	require.NoError(t, owner.Call("lock.LockRead", &lockV1.Request{
+		Resource: resource, Id: "owner", Ttl: new(int64(300_000)),
+	}, &held))
+	require.True(t, held.GetOk())
+
+	var response lockV1.Response
+	pending := owner.Go("lock.LockRead", &lockV1.Request{
+		Resource: resource, Id: "owner", Ttl: new(int64(300_000)), Wait: new(int64(1_000_000)),
+	}, &response, nil)
+
+	// The duplicate can finish before it needs a subscription.
+	var result *rpc.Call
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		select {
+		case result = <-pending.Done:
+			return
+		default:
+		}
+		counts, err := admin.PubSubNumSub(t.Context(), "rr:lock:"+resource).Result()
+		require.NoError(c, err)
+		require.EqualValues(c, 1, counts["rr:lock:"+resource])
+	}, time.Second, time.Millisecond)
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		var exists lockV1.Response
+		require.NoError(c, other.Call("lock.Exists", &lockV1.Request{Resource: resource, Id: "owner"}, &exists))
+		require.False(c, exists.GetOk())
+	}, time.Second, 5*time.Millisecond)
+
+	// A new reader publishes after the owner's member expires.
+	var reader lockV1.Response
+	require.NoError(t, other.Call("lock.LockRead", &lockV1.Request{Resource: resource, Id: "other"}, &reader))
+	require.True(t, reader.GetOk())
+
+	if result == nil {
+		select {
+		case result = <-pending.Done:
+		case <-time.After(time.Second):
+			t.Fatal("duplicate read acquisition did not complete")
+		}
+	}
+	require.NoError(t, result.Error)
+	assert.False(t, response.GetOk(), "a notification after expiry must not revive a refused read acquisition")
+
+	var exists lockV1.Response
+	require.NoError(t, other.Call("lock.Exists", &lockV1.Request{Resource: resource, Id: "owner"}, &exists))
+	assert.False(t, exists.GetOk(), "a refused read acquisition must not recreate the expired member")
+}
+
 func TestRedisConcurrentWriters(t *testing.T) {
 	first, second, _ := redisRPCClients(t)
 	clients := []*rpc.Client{first, second}

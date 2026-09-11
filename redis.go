@@ -9,6 +9,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// redisDuplicateReadDelay is the Lua sentinel for terminal read refusal.
+const redisDuplicateReadDelay = -2 * time.Microsecond
+
 //go:embed redis.lua
 var redisScript string
 
@@ -110,8 +113,8 @@ func (r *redisBackend) acquire(ctx context.Context, op, res, id string, ttl, wai
 	ctx, cancel := r.requestContext(ctx, wait)
 	defer cancel()
 	key := "rr:lock:" + res
-	ok, _, err := r.run(ctx, op, key, id, ttl)
-	if err != nil || ok || wait <= 0 {
+	ok, delay, err := r.run(ctx, op, key, id, ttl)
+	if err != nil || ok || delay == redisDuplicateReadDelay || wait <= 0 {
 		return ok, acquisitionError(ctx, err)
 	}
 
@@ -133,7 +136,7 @@ func (r *redisBackend) acquire(ctx context.Context, op, res, id string, ttl, wai
 		}
 		// Check after subscription confirmation to cover a concurrent release.
 		ok, delay, runErr := r.run(ctx, op, key, id, ttl)
-		if runErr != nil || ok {
+		if runErr != nil || ok || delay == redisDuplicateReadDelay {
 			return ok, acquisitionError(ctx, runErr)
 		}
 		var expiry <-chan time.Time
