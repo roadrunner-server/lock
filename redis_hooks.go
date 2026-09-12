@@ -9,7 +9,8 @@ import (
 )
 
 type redisClientHook struct {
-	ctx context.Context
+	ctx       context.Context
+	connected func()
 }
 
 func (h redisClientHook) DialHook(next redis.DialHook) redis.DialHook {
@@ -24,7 +25,11 @@ func (h redisClientHook) DialHook(next redis.DialHook) redis.DialHook {
 		}
 		// Closing the socket interrupts I/O even while PubSub holds its internal mutex.
 		closeConn := sync.OnceValue(conn.Close)
-		return &redisConn{Conn: conn, close: closeConn, stop: context.AfterFunc(h.ctx, func() { _ = closeConn() })}, nil
+		conn = &redisConn{Conn: conn, close: closeConn, stop: context.AfterFunc(h.ctx, func() { _ = closeConn() })}
+		if h.connected != nil {
+			h.connected()
+		}
+		return conn, nil
 	}
 }
 

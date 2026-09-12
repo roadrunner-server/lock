@@ -108,17 +108,6 @@ func newRedisBackend(log *slog.Logger, cfg RedisConfig) (*redisBackend, error) {
 		MaxRetries: -1,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
-	hook := redisClientHook{ctx: ctx}
-	client.AddHook(hook)
-	if cluster, ok := client.(*redis.ClusterClient); ok {
-		cluster.OnNewNode(func(node *redis.Client) { node.AddHook(hook) })
-	}
-	if err := client.Ping(ctx).Err(); err != nil {
-		cancel()
-		_ = client.Close()
-		return nil, err
-	}
-	log.Info("lock backend initialized", "driver", "redis", "addrs", cfg.Addrs, "db", cfg.DB)
 	r := &redisBackend{
 		log:        log,
 		client:     client,
@@ -130,6 +119,17 @@ func newRedisBackend(log *slog.Logger, cfg RedisConfig) (*redisBackend, error) {
 		changed:    make(chan struct{}, 1),
 		stopped:    make(chan struct{}),
 	}
+	hook := redisClientHook{ctx: ctx, connected: func() { r.retryUnsubscribe(nil) }}
+	client.AddHook(hook)
+	if cluster, ok := client.(*redis.ClusterClient); ok {
+		cluster.OnNewNode(func(node *redis.Client) { node.AddHook(hook) })
+	}
+	if err := client.Ping(ctx).Err(); err != nil {
+		cancel()
+		_ = client.Close()
+		return nil, err
+	}
+	log.Info("lock backend initialized", "driver", "redis", "addrs", cfg.Addrs, "db", cfg.DB)
 	r.receivers.Go(r.syncSubscriptions)
 	return r, nil
 }
@@ -458,10 +458,11 @@ func (r *redisBackend) pingSubscription(ctx context.Context, sub *redis.PubSub) 
 }
 
 // retryUnsubscribe keeps the acknowledgment barrier after a physical connection replacement.
+// A nil sub reports a dial before its connection is assigned to a PubSub or command pool.
 func (r *redisBackend) retryUnsubscribe(sub *redis.PubSub) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.sub == sub && r.pending != nil && !r.pending.subscribe {
+	if (sub == nil || r.sub == sub) && r.pending != nil && !r.pending.subscribe {
 		select {
 		case r.pending.retry <- struct{}{}:
 		default:
