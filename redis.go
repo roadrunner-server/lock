@@ -46,7 +46,29 @@ type subscriptionChange struct {
 	waiters   *channelWaiters
 	subscribe bool
 	done      chan struct{}
+	retry     chan struct{}
 	err       error
+}
+
+func (c *subscriptionChange) wait(ctx context.Context) error {
+	for {
+		select {
+		case <-c.done:
+			return c.err
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.retry:
+			select {
+			case <-c.done:
+				return c.err
+			default:
+			}
+			// UNSUBSCRIBE is idempotent. Its lost acknowledgment is absent after reconnect.
+			if err := c.sub.Unsubscribe(ctx, c.channel); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 // channelWaiters holds the acquisitions that wait on one Pub/Sub channel.
@@ -310,6 +332,7 @@ func (r *redisBackend) queueSubscription(channel string, waiters *channelWaiters
 	}
 	r.changes = append(r.changes, &subscriptionChange{
 		sub: r.sub, channel: channel, waiters: waiters, subscribe: subscribe, done: make(chan struct{}),
+		retry: make(chan struct{}, 1),
 	})
 	select {
 	case r.changed <- struct{}{}:
@@ -353,12 +376,7 @@ func (r *redisBackend) syncSubscriptions() {
 		}
 		if err == nil {
 			// Drain each confirmation before a new generation can use this channel.
-			select {
-			case <-change.done:
-				err = change.err
-			case <-ctx.Done():
-				err = ctx.Err()
-			}
+			err = change.wait(ctx)
 		}
 		cancel()
 		if err != nil {
@@ -391,6 +409,7 @@ func (r *redisBackend) dispatch(sub *redis.PubSub) {
 				return
 			}
 			// Receive reconnects after transport errors. Bound repeated dial failures.
+			r.retryUnsubscribe(sub)
 			retry.Reset(100 * time.Millisecond)
 			select {
 			case <-r.ctx.Done():
@@ -406,6 +425,7 @@ func (r *redisBackend) dispatch(sub *redis.PubSub) {
 			// A reconnected subscription can miss messages.
 			// https://redis.io/docs/latest/develop/pubsub/#delivery-semantics
 			if r.confirmSubscription(sub, message) {
+				r.retryUnsubscribe(sub)
 				r.log.Warn("redis lock subscription reconnected", "channel", message.Channel)
 				r.wakeWaiters(sub, message.Channel)
 			}
@@ -430,7 +450,21 @@ func (r *redisBackend) pingSubscription(ctx context.Context, sub *redis.PubSub) 
 			return
 		case <-ticker.C:
 			// Ping reconnects on write errors; Receive consumes its reply.
-			_ = sub.Ping(ctx)
+			if err := sub.Ping(ctx); err != nil {
+				r.retryUnsubscribe(sub)
+			}
+		}
+	}
+}
+
+// retryUnsubscribe keeps the acknowledgment barrier after a physical connection replacement.
+func (r *redisBackend) retryUnsubscribe(sub *redis.PubSub) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sub == sub && r.pending != nil && !r.pending.subscribe {
+		select {
+		case r.pending.retry <- struct{}{}:
+		default:
 		}
 	}
 }
