@@ -44,6 +44,16 @@ func TestRedisInvalidConfiguration(t *testing.T) {
 		{name: "invalid database", section: "lock: {driver: redis, config: {db: invalid}}"},
 		{name: "empty addresses", section: "lock: {driver: redis, config: {addrs: []}}"},
 		{
+			name:    "negative standalone database",
+			section: "lock: {driver: redis, config: {addrs: ['127.0.0.1:1'], db: -1}}",
+			message: "db must not be negative",
+		},
+		{
+			name:    "negative sentinel database",
+			section: "lock: {driver: redis, config: {addrs: ['127.0.0.1:1', '127.0.0.1:2'], master_name: mymaster, db: -1}}",
+			message: "db must not be negative",
+		},
+		{
 			name:    "database with cluster addresses",
 			section: "lock: {driver: redis, config: {addrs: ['127.0.0.1:1', '127.0.0.1:2'], db: 1}}",
 			message: "cluster client uses database 0",

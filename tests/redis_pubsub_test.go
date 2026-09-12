@@ -251,6 +251,177 @@ func redisScriptCalls(t *testing.T, admin *redis.Client) uint64 {
 	return 0
 }
 
+func TestRedisWaitDeadlineDuringPubSubHandshake(t *testing.T) {
+	admin := redisAdmin(t, 0)
+	proxy, arm, stalled, _, resume := redisHandshakeProxy(t)
+	holder, _ := lockRPCClient(t, &config.Plugin{Path: "configs/.rr-lock-redis.yaml"})
+	waiter, _ := lockRPCClient(t, &config.Plugin{
+		Type: "yaml", ReadInCfg: fmt.Appendf(nil,
+			"version: '3'\nlogs: {level: error}\nlock: {driver: redis, config: {addrs: [%q]}}", proxy),
+	})
+	resource, other := t.Name(), t.Name()+"/other"
+	t.Cleanup(func() { assert.NoError(t, admin.Del(context.Background(), "rr:lock:"+other).Err()) })
+	for _, res := range []string{resource, other} {
+		var held lockV1.Response
+		require.NoError(t, holder.Call("lock.Lock", &lockV1.Request{Resource: res, Id: "holder"}, &held))
+		require.True(t, held.GetOk())
+	}
+	arm()
+	var first, second, survivor lockV1.Response
+	pending := waiter.Go("lock.Lock", &lockV1.Request{
+		Resource: resource, Id: "short", Wait: new(int64(50_000)),
+	}, &first, nil)
+	select {
+	case <-stalled:
+	case <-time.After(time.Second):
+		t.Fatal("the Pub/Sub handshake did not reach the proxy")
+	}
+	another := waiter.Go("lock.Lock", &lockV1.Request{
+		Resource: other, Id: "short", Wait: new(int64(50_000)),
+	}, &second, nil)
+	for _, call := range []*rpc.Call{pending, another} {
+		select {
+		case result := <-call.Done:
+			require.NoError(t, result.Error)
+			require.False(t, result.Reply.(*lockV1.Response).GetOk())
+		case <-time.After(300 * time.Millisecond):
+			t.Fatal("a stalled shared handshake bypassed an RPC wait deadline")
+		}
+	}
+	long := waiter.Go("lock.Lock", &lockV1.Request{
+		Resource: resource, Id: "survivor", Wait: new(int64(2_000_000)),
+	}, &survivor, nil)
+	resume()
+	waitForSubscriber(t, admin, resource)
+	var released lockV1.Response
+	require.NoError(t, holder.Call("lock.Release", &lockV1.Request{Resource: resource, Id: "holder"}, &released))
+	require.True(t, released.GetOk())
+	select {
+	case result := <-long.Done:
+		require.NoError(t, result.Error)
+		require.True(t, survivor.GetOk(), "an expired caller must not cancel the shared receiver or its replacement group")
+	case <-time.After(time.Second):
+		t.Fatal("the replacement waiter did not recover after the handshake")
+	}
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		counts, err := admin.PubSubNumSub(t.Context(), "rr:lock:"+resource, "rr:lock:"+other).Result()
+		require.NoError(c, err)
+		require.Zero(c, counts["rr:lock:"+resource])
+		require.Zero(c, counts["rr:lock:"+other])
+	}, time.Second, time.Millisecond)
+}
+
+func TestRedisStopDuringPubSubHandshake(t *testing.T) {
+	redisAdmin(t, 0)
+	proxy, arm, stalled, closed, _ := redisHandshakeProxy(t)
+	cont, plugin := lockContainer(t, &config.Plugin{
+		Type: "yaml", ReadInCfg: fmt.Appendf(nil,
+			"version: '3'\nlogs: {level: error}\nlock: {driver: redis, config: {addrs: [%q]}}", proxy),
+	})
+	client, _ := serveLockRPC(t, cont, plugin)
+	var held, response lockV1.Response
+	require.NoError(t, client.Call("lock.Lock", &lockV1.Request{Resource: t.Name(), Id: "holder"}, &held))
+	require.True(t, held.GetOk())
+	arm()
+	pending := client.Go("lock.Lock", &lockV1.Request{
+		Resource: t.Name(), Id: "waiter", Wait: new(int64(10_000_000)),
+	}, &response, nil)
+	select {
+	case <-stalled:
+	case <-time.After(time.Second):
+		t.Fatal("the Pub/Sub handshake did not reach the proxy")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	stopped := make(chan error, 1)
+	go func() { stopped <- plugin.Stop(ctx) }()
+	select {
+	case err := <-stopped:
+		if err != nil {
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("stop bypassed its deadline during Pub/Sub initialization")
+	}
+	select {
+	case <-closed:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("stop did not close the initializing Pub/Sub socket")
+	}
+	select {
+	case result := <-pending.Done:
+		require.Error(t, result.Error)
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("stop did not cancel the pending RPC")
+	}
+}
+
+// redisHandshakeProxy holds the first reply on the next connection after arm.
+func redisHandshakeProxy(t *testing.T) (string, func(), <-chan struct{}, <-chan struct{}, func()) {
+	t.Helper()
+	var listen net.ListenConfig
+	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	var armed atomic.Bool
+	stalled, closed, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	resume := sync.OnceFunc(func() { close(release) })
+	var workers sync.WaitGroup
+	ctx := t.Context()
+	workers.Go(func() {
+		for {
+			caller, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			stall := armed.CompareAndSwap(true, false)
+			workers.Go(func() {
+				defer func() { _ = caller.Close() }()
+				var dialer net.Dialer
+				server, err := dialer.DialContext(ctx, "tcp", redisAddr())
+				if err != nil {
+					return
+				}
+				defer func() { _ = server.Close() }()
+				stop := context.AfterFunc(ctx, func() {
+					_ = caller.Close()
+					_ = server.Close()
+				})
+				defer stop()
+				workers.Go(func() {
+					_, _ = io.Copy(server, caller)
+					_ = server.Close()
+					if stall {
+						close(closed)
+					}
+				})
+				if stall {
+					frame, err := readRedisFrame(bufio.NewReader(server))
+					if err != nil {
+						return
+					}
+					close(stalled)
+					select {
+					case <-ctx.Done():
+						return
+					case <-closed:
+						return
+					case <-release:
+					}
+					if _, err = caller.Write(frame); err != nil {
+						return
+					}
+				}
+				_, _ = io.Copy(caller, server)
+			})
+		}
+	})
+	t.Cleanup(func() {
+		assert.NoError(t, listener.Close())
+		workers.Wait()
+	})
+	return listener.Addr().String(), func() { armed.Store(true) }, stalled, closed, resume
+}
+
 // redisPubSubProxy can drop replies or pause notifications after the message field.
 func redisPubSubProxy(t *testing.T, fragmentDelay time.Duration) (string, func()) {
 	t.Helper()

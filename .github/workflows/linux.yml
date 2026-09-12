@@ -49,6 +49,9 @@ jobs:
       - name: Install Go dependencies
         run: go mod download
 
+      - name: Run root module race tests
+        run: go test -timeout 20m -v -race -tags=debug ./...
+
       - name: Run golang tests with coverage
         run: |
           cd tests

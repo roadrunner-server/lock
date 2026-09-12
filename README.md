@@ -25,7 +25,7 @@ lock:
 
 The `lock` section requires `driver: memory` or `driver: redis`. Invalid configuration and connection failures stop plugin initialization.
 
-Redis requires version 7 or later. The backend uses `go-redis/v9`. A set `master_name` selects a failover client for any number of addresses. Without `master_name`, one address selects a standalone client and two or more addresses select a cluster client. The default address is `127.0.0.1:6379`. Authentication is optional. The default database is `0`. The `db` setting applies to a standalone client and to a failover client. A cluster client uses database 0 only. Without `master_name`, a non-zero `db` with more than one address is rejected at startup.
+Redis requires version 7 or later. The backend uses `go-redis/v9`. A set `master_name` selects a failover client for any number of addresses. Without `master_name`, one address selects a standalone client and two or more addresses select a cluster client. The default address is `127.0.0.1:6379`. Authentication is optional. The default database is `0`. The `db` setting applies to a standalone client and to a failover client. Negative database numbers are rejected at startup. A cluster client uses database 0 only. Without `master_name`, a non-zero `db` with more than one address is rejected at startup.
 
 Set `master_name` to use Redis Sentinel. The `addrs` list then holds the Sentinel addresses. Set `sentinel_password` when the Sentinel nodes need their own password.
 
@@ -40,7 +40,7 @@ lock:
 
 Set `pool_size` to size the connection pool for one Redis node. The client opens more connections when the pool is busy. The value `0` selects the `go-redis` default.
 
-Optional `dial_timeout`, `read_timeout`, and `write_timeout` settings accept Go durations, such as `5s`. Omitted timeouts use the Redis client defaults. Negative timeouts are rejected at startup. This includes the values `-1` and `-2`, which the Redis client reads as no timeout. Plugin initialization tests the connection with one `PING` command. The client dials each address up to five times. The `dial_timeout` bounds each attempt and the `read_timeout` bounds the reply.
+Optional `dial_timeout`, `read_timeout`, and `write_timeout` settings accept Go durations, such as `5s`. Omitted timeouts use the Redis client defaults. Negative timeouts are rejected at startup. This includes the values `-1` and `-2`, which disable read and write timeouts in the Redis client. A negative dial timeout gives the dialer a deadline in the past. Plugin initialization tests the connection with one `PING` command. The client dials each address up to five times. The `dial_timeout` bounds each attempt and the `read_timeout` bounds the reply.
 
 Add the `tls` block to connect with TLS:
 
@@ -57,7 +57,7 @@ Set `root_ca` to the PEM file of a private certificate authority. An empty `root
 
 Write at least one key in the `tls` block. The configuration reader drops a block that has no keys, and the connection then stays plaintext. Write `root_ca: ""` for a server with a public certificate authority.
 
-The `max_retries` key of the RoadRunner Redis plugin is absent. The backend keeps retries off, because a retry after a lost reply reports contention for a lock that the caller now holds. The `route_by_latency`, `route_randomly`, and `read_only` keys are absent, because the lock script writes and must run on the master. The `min_retry_backoff`, `max_retry_backoff`, `min_idle_conns`, `max_conn_age`, `pool_timeout`, `idle_timeout`, and `idle_check_freq` keys are absent as well.
+The `max_retries` key of the RoadRunner Redis plugin is absent. The backend does not repeat a script after a transport failure, because a retry after a lost reply reports contention for a lock that the caller now holds. It follows `MOVED` and `ASK` replies and loads the script after a `NOSCRIPT` reply. The `route_by_latency`, `route_randomly`, and `read_only` keys are absent, because the lock script writes and must run on the master. The `min_retry_backoff`, `max_retry_backoff`, `min_idle_conns`, `max_conn_age`, `pool_timeout`, `idle_timeout`, and `idle_check_freq` keys are absent as well.
 
 Both backends accept a `ttl` and a `wait` from 0 to 9223372036854775 microseconds. That limit is the largest microsecond count which fits a Go duration. `Lock`, `LockRead`, and `UpdateTTL` reject a `ttl` outside this range. All methods reject a `wait` outside this range. A rejected request returns an RPC error and changes no lock state.
 
@@ -74,9 +74,9 @@ RPC TTLs and wait times use microseconds. Each reader has its own TTL. A zero TT
 
 Waiting acquisitions use Redis Pub/Sub notifications and expiry timers. See [Wait semantics](#wait-semantics).
 
-All waiting calls of one RoadRunner instance share one Pub/Sub connection. The backend opens that connection with the first waiting call. The backend subscribes to the channel of a resource while a call waits for that resource.
+All waiting calls of one RoadRunner instance share one Pub/Sub connection. The backend opens that connection with the first waiting call. The backend subscribes to the channel of a resource while a call waits for that resource. Subscription setup and cleanup run independently of each caller's wait.
 
-Stopping the plugin cancels waiting calls and closes its Redis client. Stored locks remain available to other RoadRunner instances until release or expiry.
+Stopping the plugin cancels waiting calls and closes its Redis client. If the stop context expires, the stop call returns a context error and cleanup continues in the background. Stored locks remain available to other RoadRunner instances until release or expiry.
 
 ## Wait semantics
 

@@ -35,7 +35,10 @@ func (c *RedisConfig) Validate() error {
 	if len(c.Addrs) == 0 {
 		return errors.New("addrs must not be empty")
 	}
-	// go-redis builds a cluster client for more than one address. Cluster options carry no database.
+	if c.DB < 0 {
+		return errors.New("db must not be negative")
+	}
+	// Multiple addresses select a cluster client when master_name is unset. Cluster options carry no database.
 	if len(c.Addrs) > 1 && c.MasterName == "" && c.DB != 0 {
 		return errors.New("db must be 0 with more than one address because the cluster client uses database 0")
 	}
