@@ -20,41 +20,52 @@ import (
 )
 
 func TestRedisClusterLostScriptReply(t *testing.T) {
-	for _, method := range []string{"Lock", "LockRead", "Release"} {
-		for _, command := range []string{"evalsha", "eval"} {
-			t.Run(method+"/"+command, func(t *testing.T) {
-				admin := redisAdmin(t, 0)
-				var executions atomic.Int32
-				proxy := redisClusterProxy(t, nil, func(args []string, reply []byte) bool {
-					if args[0] == command && args[4] != "exists" && bytes.HasPrefix(reply, []byte("*2\r\n:1\r\n")) {
-						return executions.Add(1) != 1
-					}
-					return true
-				})
-				client, _ := lockRPCClient(t, clusterProxyConfig(proxy))
-				observer, _ := lockRPCClient(t, &config.Plugin{Path: "configs/.rr-lock-redis.yaml"})
-				request := &lockV1.Request{Resource: t.Name(), Id: "owner"}
-				var warm lockV1.Response
-				require.NoError(t, client.Call("lock.Exists", request, &warm))
-				if method == "Release" {
-					var held lockV1.Response
-					require.NoError(t, observer.Call("lock.Lock", request, &held))
-					require.True(t, held.GetOk())
-				}
-				if command == "eval" {
-					require.NoError(t, admin.ScriptFlush(t.Context()).Err())
-				}
+	tests := []struct {
+		name    string
+		method  string
+		command string
+	}{
+		{name: "Lock/evalsha", method: "Lock", command: "evalsha"},
+		{name: "Lock/eval", method: "Lock", command: "eval"},
+		{name: "LockRead/evalsha", method: "LockRead", command: "evalsha"},
+		{name: "LockRead/eval", method: "LockRead", command: "eval"},
+		{name: "Release/evalsha", method: "Release", command: "evalsha"},
+		{name: "Release/eval", method: "Release", command: "eval"},
+	}
 
-				var response lockV1.Response
-				err := client.Call("lock."+method, request, &response)
-				assert.Error(t, err, "a lost cluster script reply must report an unknown outcome")
-				assert.False(t, response.GetOk())
-				require.EqualValues(t, 1, executions.Load(), "the proxy must discard a successful script reply")
-				var observed lockV1.Response
-				require.NoError(t, observer.Call("lock.Exists", request, &observed))
-				assert.Equal(t, method != "Release", observed.GetOk(), "Redis applied the mutation before its reply was lost")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			admin := redisAdmin(t, 0)
+			var executions atomic.Int32
+			proxy := redisClusterProxy(t, nil, func(args []string, reply []byte) bool {
+				if args[0] == tt.command && args[4] != "exists" && bytes.HasPrefix(reply, []byte("*2\r\n:1\r\n")) {
+					return executions.Add(1) != 1
+				}
+				return true
 			})
-		}
+			client, _ := lockRPCClient(t, clusterProxyConfig(proxy))
+			observer, _ := lockRPCClient(t, &config.Plugin{Path: "configs/.rr-lock-redis.yaml"})
+			request := &lockV1.Request{Resource: t.Name(), Id: "owner"}
+			var warm lockV1.Response
+			require.NoError(t, client.Call("lock.Exists", request, &warm))
+			if tt.method == "Release" {
+				var held lockV1.Response
+				require.NoError(t, observer.Call("lock.Lock", request, &held))
+				require.True(t, held.GetOk())
+			}
+			if tt.command == "eval" {
+				require.NoError(t, admin.ScriptFlush(t.Context()).Err())
+			}
+
+			var response lockV1.Response
+			err := client.Call("lock."+tt.method, request, &response)
+			assert.Error(t, err, "a lost cluster script reply must report an unknown outcome")
+			assert.False(t, response.GetOk())
+			require.EqualValues(t, 1, executions.Load(), "the proxy must discard a successful script reply")
+			var observed lockV1.Response
+			require.NoError(t, observer.Call("lock.Exists", request, &observed))
+			assert.Equal(t, tt.method != "Release", observed.GetOk(), "Redis applied the mutation before its reply was lost")
+		})
 	}
 }
 
