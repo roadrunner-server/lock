@@ -70,8 +70,16 @@ func TestRedisClusterLostScriptReply(t *testing.T) {
 }
 
 func TestRedisClusterScriptRedirects(t *testing.T) {
-	for _, redirect := range []string{"MOVED", "ASK"} {
-		t.Run(redirect, func(t *testing.T) {
+	tests := []struct {
+		name     string
+		redirect string
+	}{
+		{name: "MOVED", redirect: "MOVED"},
+		{name: "ASK", redirect: "ASK"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			admin := redisAdmin(t, 0)
 			var fallbacks atomic.Int32
 			target := redisClusterProxy(t, nil, func(args []string, _ []byte) bool {
@@ -84,7 +92,7 @@ func TestRedisClusterScriptRedirects(t *testing.T) {
 			proxy := redisClusterProxy(t, func(args []string) []byte {
 				if args[0] == "evalsha" || args[0] == "eval" {
 					redirects.Add(1)
-					return fmt.Appendf(nil, "-%s 0 %s\r\n", redirect, target)
+					return fmt.Appendf(nil, "-%s 0 %s\r\n", tt.redirect, target)
 				}
 				return nil
 			}, nil)

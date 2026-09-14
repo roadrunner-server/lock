@@ -13,10 +13,21 @@ import (
 func TestMemoryDefault(t *testing.T) {
 	first, _ := lockRPCClient(t, &config.Plugin{Path: "configs/.rr-lock-init.yaml", Flags: []string{"logs.level=error"}})
 	second, _ := lockRPCClient(t, &config.Plugin{Path: "configs/.rr-lock-init.yaml", Flags: []string{"logs.level=error"}})
-	for _, client := range []*rpc.Client{first, second} {
-		var response lockV1.Response
-		require.NoError(t, client.Call("lock.Lock", &lockV1.Request{Resource: t.Name(), Id: "owner"}, &response))
-		assert.True(t, response.GetOk(), "default locks must be local to each RR instance")
+	resource := t.Name()
+	tests := []struct {
+		name   string
+		client *rpc.Client
+	}{
+		{name: "first instance", client: first},
+		{name: "second instance", client: second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var response lockV1.Response
+			require.NoError(t, tt.client.Call("lock.Lock", &lockV1.Request{Resource: resource, Id: "owner"}, &response))
+			assert.True(t, response.GetOk(), "default locks must be local to each RR instance")
+		})
 	}
 }
 
@@ -26,10 +37,21 @@ func TestMemoryExplicitDriver(t *testing.T) {
 	}
 	first, _ := lockRPCClient(t, memoryConfig())
 	second, _ := lockRPCClient(t, memoryConfig())
-	for _, client := range []*rpc.Client{first, second} {
-		var response lockV1.Response
-		require.NoError(t, client.Call("lock.Lock", &lockV1.Request{Resource: t.Name(), Id: "owner"}, &response))
-		assert.True(t, response.GetOk(), "memory locks must be local to each RR instance")
+	resource := t.Name()
+	tests := []struct {
+		name   string
+		client *rpc.Client
+	}{
+		{name: "first instance", client: first},
+		{name: "second instance", client: second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var response lockV1.Response
+			require.NoError(t, tt.client.Call("lock.Lock", &lockV1.Request{Resource: resource, Id: "owner"}, &response))
+			assert.True(t, response.GetOk(), "memory locks must be local to each RR instance")
+		})
 	}
 }
 

@@ -18,13 +18,21 @@ import (
 )
 
 func TestRedisSubscriptionIOOutsideRegistry(t *testing.T) {
-	for _, command := range []string{"subscribe", "unsubscribe"} {
-		t.Run(command, func(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{name: "subscribe", command: "subscribe"},
+		{name: "unsubscribe", command: "unsubscribe"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			r := subscriptionTestBackend(t)
 			blocked, release := make(chan struct{}), make(chan struct{})
 			unblock := sync.OnceFunc(func() { close(release) })
 			defer unblock()
-			r.client.AddHook(subscriptionWriteHook{command: command, blocked: blocked, release: release})
+			r.client.AddHook(subscriptionWriteHook{command: tt.command, blocked: blocked, release: release})
 			wake := make(chan struct{}, 1)
 			registered := make(chan *channelWaiters, 1)
 			go func() {
@@ -37,7 +45,7 @@ func TestRedisSubscriptionIOOutsideRegistry(t *testing.T) {
 			case <-time.After(300 * time.Millisecond):
 				t.Fatal("registration waited for a Pub/Sub socket write")
 			}
-			if command == "unsubscribe" {
+			if tt.command == "unsubscribe" {
 				awaitSubscriptionEvent(t, group.ready, "initial subscription")
 				removed := make(chan struct{})
 				go func() {

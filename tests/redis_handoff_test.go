@@ -18,8 +18,16 @@ import (
 )
 
 func TestRedisUnsubscribeSilentHandoff(t *testing.T) {
-	for _, replacement := range []bool{false, true} {
-		t.Run(fmt.Sprintf("replacement=%t", replacement), func(t *testing.T) {
+	tests := []struct {
+		name        string
+		replacement bool
+	}{
+		{name: "replacement=false", replacement: false},
+		{name: "replacement=true", replacement: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			admin := redisAdmin(t, 0)
 			expiring, queuedResource := t.Name(), t.Name()+"/new"
 			t.Cleanup(func() {
@@ -27,7 +35,7 @@ func TestRedisUnsubscribeSilentHandoff(t *testing.T) {
 				defer cancel()
 				assert.NoError(t, admin.Del(ctx, "rr:lock:"+queuedResource).Err())
 			})
-			if replacement {
+			if tt.replacement {
 				queuedResource = expiring
 			}
 			proxy, pongHeld, handedOff, contended := redisSilentHandoffProxy(t, "rr:lock:"+expiring, "rr:lock:"+queuedResource)
@@ -38,7 +46,7 @@ func TestRedisUnsubscribeSilentHandoff(t *testing.T) {
 			})
 			waiter, _ := serveLockRPC(t, cont, plugin)
 			resources := []string{expiring}
-			if !replacement {
+			if !tt.replacement {
 				resources = append(resources, queuedResource)
 			}
 			for _, resource := range resources {

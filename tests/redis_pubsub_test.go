@@ -261,10 +261,17 @@ func TestRedisWaitDeadlineDuringPubSubHandshake(t *testing.T) {
 	})
 	resource, other := t.Name(), t.Name()+"/other"
 	t.Cleanup(func() { assert.NoError(t, admin.Del(context.Background(), "rr:lock:"+other).Err()) })
-	for _, res := range []string{resource, other} {
+	resources := []struct {
+		name     string
+		resource string
+	}{
+		{name: "hold first resource", resource: resource},
+		{name: "hold other resource", resource: other},
+	}
+	for _, tt := range resources {
 		var held lockV1.Response
-		require.NoError(t, holder.Call("lock.Lock", &lockV1.Request{Resource: res, Id: "holder"}, &held))
-		require.True(t, held.GetOk())
+		require.NoError(t, holder.Call("lock.Lock", &lockV1.Request{Resource: tt.resource, Id: "holder"}, &held), tt.name)
+		require.True(t, held.GetOk(), tt.name)
 	}
 	arm()
 	var first, second, survivor lockV1.Response
@@ -279,13 +286,20 @@ func TestRedisWaitDeadlineDuringPubSubHandshake(t *testing.T) {
 	another := waiter.Go("lock.Lock", &lockV1.Request{
 		Resource: other, Id: "short", Wait: new(int64(50_000)),
 	}, &second, nil)
-	for _, call := range []*rpc.Call{pending, another} {
+	calls := []struct {
+		name string
+		call *rpc.Call
+	}{
+		{name: "first request deadline", call: pending},
+		{name: "other request deadline", call: another},
+	}
+	for _, tt := range calls {
 		select {
-		case result := <-call.Done:
-			require.NoError(t, result.Error)
-			require.False(t, result.Reply.(*lockV1.Response).GetOk())
+		case result := <-tt.call.Done:
+			require.NoError(t, result.Error, tt.name)
+			require.False(t, result.Reply.(*lockV1.Response).GetOk(), tt.name)
 		case <-time.After(300 * time.Millisecond):
-			t.Fatal("a stalled shared handshake bypassed an RPC wait deadline")
+			t.Fatalf("%s: a stalled shared handshake bypassed an RPC wait deadline", tt.name)
 		}
 	}
 	long := waiter.Go("lock.Lock", &lockV1.Request{

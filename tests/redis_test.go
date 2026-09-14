@@ -52,12 +52,21 @@ func TestRedisLockCompatibility(t *testing.T) {
 func TestRedisReadLockPromotion(t *testing.T) {
 	first, second, _ := redisRPCClients(t)
 	resource := t.Name()
-	for i, client := range []*rpc.Client{first, second} {
+	readers := []struct {
+		name   string
+		client *rpc.Client
+		id     string
+	}{
+		{name: "first reader", client: first, id: "reader-0"},
+		{name: "second reader", client: second, id: "reader-1"},
+	}
+
+	for _, tt := range readers {
 		var acquired lockV1.Response
-		require.NoError(t, client.Call("lock.LockRead", &lockV1.Request{
-			Resource: resource, Id: fmt.Sprintf("reader-%d", i),
-		}, &acquired))
-		require.True(t, acquired.GetOk())
+		require.NoError(t, tt.client.Call("lock.LockRead", &lockV1.Request{
+			Resource: resource, Id: tt.id,
+		}, &acquired), tt.name)
+		require.True(t, acquired.GetOk(), tt.name)
 	}
 
 	var blocked lockV1.Response
@@ -277,12 +286,21 @@ func TestRedisExists(t *testing.T) {
 func TestRedisForceRelease(t *testing.T) {
 	first, second, _ := redisRPCClients(t)
 	resource := t.Name()
-	for i, client := range []*rpc.Client{first, second} {
+	readers := []struct {
+		name   string
+		client *rpc.Client
+		id     string
+	}{
+		{name: "first reader", client: first, id: "reader-0"},
+		{name: "second reader", client: second, id: "reader-1"},
+	}
+
+	for _, tt := range readers {
 		var acquired lockV1.Response
-		require.NoError(t, client.Call("lock.LockRead", &lockV1.Request{
-			Resource: resource, Id: fmt.Sprintf("reader-%d", i),
-		}, &acquired))
-		require.True(t, acquired.GetOk())
+		require.NoError(t, tt.client.Call("lock.LockRead", &lockV1.Request{
+			Resource: resource, Id: tt.id,
+		}, &acquired), tt.name)
+		require.True(t, acquired.GetOk(), tt.name)
 	}
 
 	var released lockV1.Response
@@ -336,12 +354,21 @@ func TestRedisUpdateTTL(t *testing.T) {
 func TestRedisReaderTTLsAreIndependent(t *testing.T) {
 	first, second, _ := redisRPCClients(t)
 	resource := t.Name()
-	for i, client := range []*rpc.Client{first, second} {
+	readers := []struct {
+		name   string
+		client *rpc.Client
+		id     string
+	}{
+		{name: "first reader", client: first, id: "reader-0"},
+		{name: "second reader", client: second, id: "reader-1"},
+	}
+
+	for _, tt := range readers {
 		var acquired lockV1.Response
-		require.NoError(t, client.Call("lock.LockRead", &lockV1.Request{
-			Resource: resource, Id: fmt.Sprintf("reader-%d", i),
-		}, &acquired))
-		require.True(t, acquired.GetOk())
+		require.NoError(t, tt.client.Call("lock.LockRead", &lockV1.Request{
+			Resource: resource, Id: tt.id,
+		}, &acquired), tt.name)
+		require.True(t, acquired.GetOk(), tt.name)
 	}
 
 	var updated lockV1.Response
@@ -380,10 +407,18 @@ func TestRedisExpiredOwnerCannotChangeReplacement(t *testing.T) {
 	}, &replacement))
 	require.True(t, replacement.GetOk(), "a sub-millisecond TTL must expire")
 
-	for _, method := range []string{"lock.UpdateTTL", "lock.Release"} {
-		t.Run(method, func(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+	}{
+		{name: "lock.UpdateTTL", method: "lock.UpdateTTL"},
+		{name: "lock.Release", method: "lock.Release"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			var response lockV1.Response
-			require.NoError(t, first.Call(method, &lockV1.Request{Resource: resource, Id: "expired"}, &response))
+			require.NoError(t, first.Call(tt.method, &lockV1.Request{Resource: resource, Id: "expired"}, &response))
 			assert.False(t, response.GetOk())
 		})
 	}
@@ -718,10 +753,21 @@ func TestRedisCommandError(t *testing.T) {
 
 func TestRedisEmptyID(t *testing.T) {
 	client, _, _ := redisRPCClients(t)
-	for _, method := range []string{"lock.Lock", "lock.LockRead", "lock.Release", "lock.Exists", "lock.UpdateTTL"} {
-		t.Run(method, func(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+	}{
+		{name: "lock.Lock", method: "lock.Lock"},
+		{name: "lock.LockRead", method: "lock.LockRead"},
+		{name: "lock.Release", method: "lock.Release"},
+		{name: "lock.Exists", method: "lock.Exists"},
+		{name: "lock.UpdateTTL", method: "lock.UpdateTTL"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			var response lockV1.Response
-			err := client.Call(method, &lockV1.Request{Resource: t.Name()}, &response)
+			err := client.Call(tt.method, &lockV1.Request{Resource: t.Name()}, &response)
 			require.EqualError(t, err, "empty ID is not allowed")
 		})
 	}

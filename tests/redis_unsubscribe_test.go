@@ -44,10 +44,18 @@ func TestRedisLostUnsubscribeReply(t *testing.T) {
 				Type: "yaml", ReadInCfg: fmt.Appendf(nil,
 					"version: '3'\nlogs: {level: error}\nlock: {driver: redis, config: {addrs: [%q]}}", proxy),
 			})
-			for _, resource := range []string{a, b, c} {
+			resources := []struct {
+				name     string
+				resource string
+			}{
+				{name: "hold A", resource: a},
+				{name: "hold B", resource: b},
+				{name: "hold C", resource: c},
+			}
+			for _, heldResource := range resources {
 				var held lockV1.Response
-				require.NoError(t, holder.Call("lock.Lock", &lockV1.Request{Resource: resource, Id: "holder"}, &held))
-				require.True(t, held.GetOk())
+				require.NoError(t, holder.Call("lock.Lock", &lockV1.Request{Resource: heldResource.resource, Id: "holder"}, &held), heldResource.name)
+				require.True(t, held.GetOk(), heldResource.name)
 			}
 			before := redisScriptCalls(t, admin)
 			var expired, surviving lockV1.Response
