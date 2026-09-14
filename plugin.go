@@ -2,6 +2,7 @@ package lock
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 )
 
@@ -12,15 +13,53 @@ type Logger interface {
 	NamedLogger(name string) *slog.Logger
 }
 
-type Plugin struct {
-	log   *slog.Logger
-	locks *locker
+type Configurer interface {
+	Has(name string) bool
+	UnmarshalKey(name string, out any) error
 }
 
-func (p *Plugin) Init(log Logger) error {
+type backend interface {
+	lock(ctx context.Context, res, id string, ttl, wait int64) (bool, error)
+	lockRead(ctx context.Context, res, id string, ttl, wait int64) (bool, error)
+	release(ctx context.Context, res, id string, wait int64) (bool, error)
+	forceRelease(ctx context.Context, res string, wait int64) (bool, error)
+	exists(ctx context.Context, res, id string, wait int64) (bool, error)
+	updateTTL(ctx context.Context, res, id string, ttl, wait int64) (bool, error)
+	stop(ctx context.Context) error
+}
+
+type Plugin struct {
+	log   *slog.Logger
+	locks backend
+}
+
+func (p *Plugin) Init(cfg Configurer, log Logger) error {
 	p.log = log.NamedLogger(pluginName)
-	p.locks = newLocker(p.log)
-	return nil
+	if !cfg.Has(pluginName) {
+		p.locks = &memoryBackend{locker: newLocker(p.log)}
+		p.log.Info("lock backend initialized", "driver", "memory")
+		return nil
+	}
+
+	var conf Config
+	if err := cfg.UnmarshalKey(pluginName, &conf); err != nil {
+		return fmt.Errorf("lock configuration: %w", err)
+	}
+	switch conf.Driver {
+	case "memory":
+		p.locks = &memoryBackend{locker: newLocker(p.log)}
+		p.log.Info("lock backend initialized", "driver", "memory")
+		return nil
+	case "redis":
+		locks, err := newRedisBackend(p.log, conf.Config)
+		if err != nil {
+			return fmt.Errorf("lock redis: %w", err)
+		}
+		p.locks = locks
+		return nil
+	default:
+		return fmt.Errorf("unsupported lock driver: %q", conf.Driver)
+	}
 }
 
 func (p *Plugin) Serve() chan error {
@@ -28,8 +67,7 @@ func (p *Plugin) Serve() chan error {
 }
 
 func (p *Plugin) Stop(ctx context.Context) error {
-	p.locks.stop(ctx)
-	return nil
+	return p.locks.stop(ctx)
 }
 
 func (p *Plugin) Weight() uint {

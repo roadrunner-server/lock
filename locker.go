@@ -520,6 +520,16 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 
 		// case when we don't have a writer and have 0 or more readers
 	case r.writerCount.Load() == 0:
+		// a read lock with the same ID blocks another read acquisition
+		if _, held := r.locks.Load(id); held {
+			l.log.Debug("read lock with such ID already exists",
+				"resource", res,
+				"id", id)
+
+			r.resourceMu.unlock()
+			return false
+		}
+
 		l.log.Debug("adding read lock, w==0, r>=0",
 			"resource", res,
 			"id", id)
@@ -647,8 +657,12 @@ func (l *locker) forceRelease(ctx context.Context, res string) bool {
 		return false
 	}
 
+	// A resource stays in the map after its last lock ends.
+	hasLocks := false
+
 	// broadcast release signal
 	r.locks.Range(func(key, value any) bool {
+		hasLocks = true
 		k := key.(string)
 		v := value.(*item)
 		select {
@@ -660,6 +674,11 @@ func (l *locker) forceRelease(ctx context.Context, res string) bool {
 	})
 
 	r.resourceMu.unlockRelease()
+	if !hasLocks {
+		l.log.Debug("no live locks to force release", "resource", res)
+		return false
+	}
+
 	l.log.Debug("all force-release messages were sent", "resource", res)
 	return true
 }

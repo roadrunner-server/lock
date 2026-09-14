@@ -1,1 +1,125 @@
-# Docs: [link](https://docs.roadrunner.dev/plugins/locks)
+# Lock plugin
+
+The lock plugin provides exclusive and shared locks through the [RoadRunner lock RPC API](https://docs.roadrunner.dev/docs/plugins/locks.md).
+
+## Backends
+
+Omit the `lock` section or set `driver: memory` to use in-memory locks. Each RoadRunner instance then has its own lock state.
+
+The memory backend gives the same `ForceRelease` result as Redis: `Ok: true` only if the call removed at least one lock. It removes a released lock a moment after the `Release` reply. Until then `Exists` and `ForceRelease` still report that lock.
+
+Both backends refuse a second read lock with the same ID on the same resource. Use `UpdateTTL` to extend a held lock.
+
+Configure Redis to share locks between RoadRunner instances:
+
+```yaml
+lock:
+  driver: redis
+  config:
+    addrs: ["127.0.0.1:6379"]
+    username: ""
+    password: ""
+    db: 0
+    pool_size: 0
+```
+
+The `lock` section requires `driver: memory` or `driver: redis`. Invalid configuration and connection failures stop plugin initialization.
+
+Redis requires version 7 or later. The backend uses `go-redis/v9`. A set `master_name` selects a failover client for any number of addresses. Without `master_name`, one address selects a standalone client and two or more addresses select a cluster client. The default address is `127.0.0.1:6379`. Authentication is optional. The default database is `0`. The `db` setting applies to a standalone client and to a failover client. Negative database numbers are rejected at startup. A cluster client uses database 0 only. Without `master_name`, a non-zero `db` with more than one address is rejected at startup.
+
+Set `master_name` to use Redis Sentinel. The `addrs` list then holds the Sentinel addresses. Set `sentinel_password` when the Sentinel nodes need their own password.
+
+```yaml
+lock:
+  driver: redis
+  config:
+    addrs: ["127.0.0.1:26379"]
+    master_name: "mymaster"
+    sentinel_password: ""
+```
+
+Set `pool_size` to size the connection pool for one Redis node. The client opens more connections when the pool is busy. The value `0` selects the `go-redis` default.
+
+Optional `dial_timeout`, `read_timeout`, and `write_timeout` settings accept Go durations, such as `5s`. Omitted timeouts use the Redis client defaults. Negative timeouts are rejected at startup. This includes the values `-1` and `-2`, which disable read and write timeouts in the Redis client. A negative dial timeout gives the dialer a deadline in the past. Plugin initialization tests the connection with one `PING` command. The client dials each address up to five times. The `dial_timeout` bounds each attempt and the `read_timeout` bounds the reply.
+
+Add the `tls` block to connect with TLS:
+
+```yaml
+lock:
+  driver: redis
+  config:
+    addrs: ["cache.example.com:6379"]
+    tls:
+      root_ca: ""
+```
+
+Set `root_ca` to the PEM file of a private certificate authority. An empty `root_ca` selects the system root certificates. Set `cert` and `key` together to send a client certificate. The backend reads the pair for each handshake, so a renewed certificate needs no restart. The minimum protocol version is TLS 1.2.
+
+Write at least one key in the `tls` block. The configuration reader drops a block that has no keys, and the connection then stays plaintext. Write `root_ca: ""` for a server with a public certificate authority.
+
+The `max_retries` key of the RoadRunner Redis plugin is absent. The backend does not repeat a script after a transport failure, because a retry after a lost reply reports contention for a lock that the caller now holds. It follows `MOVED` and `ASK` replies and loads the script after a `NOSCRIPT` reply. The `route_by_latency`, `route_randomly`, and `read_only` keys are absent, because the lock script writes and must run on the master. The `min_retry_backoff`, `max_retry_backoff`, `min_idle_conns`, `max_conn_age`, `pool_timeout`, `idle_timeout`, and `idle_check_freq` keys are absent as well.
+
+Both backends accept a `ttl` and a `wait` from 0 to 9223372036854775 microseconds. That limit is the largest microsecond count which fits a Go duration. `Lock`, `LockRead`, and `UpdateTTL` reject a `ttl` outside this range. All methods reject a `wait` outside this range. A rejected request returns an RPC error and changes no lock state.
+
+## Redis lock behavior
+
+- `Lock` acquires exclusive access. It can promote a read lock when that caller holds the only read lock. An existing write lock also blocks another acquisition with the same ID.
+- `LockRead` permits multiple readers while the resource has no writer. An existing read lock blocks another read acquisition with the same ID. A positive wait does not renew that read lock.
+- `Release` removes the lock with the supplied ID.
+- `ForceRelease` removes all locks on the resource. It accepts an empty ID. It returns `Ok: true` only if it removed at least one lock.
+- `Exists` checks the supplied ID. The ID `"*"` checks for any lock on the resource.
+- `UpdateTTL` replaces the supplied lock's TTL from the current time. An expired lock cannot be renewed.
+
+RPC TTLs and wait times use microseconds. Each reader has its own TTL. A zero TTL creates a persistent lock. Redis server time controls expiration. The backend stores lock state in one sorted set per resource under the `rr:lock:` prefix. The prefix is fixed. The resource name is the namespace. Give resources unique names when different applications share one Redis server. Lua scripts check ownership and change lock state atomically.
+
+Waiting acquisitions use Redis Pub/Sub notifications and expiry timers. See [Wait semantics](#wait-semantics).
+
+All waiting calls of one RoadRunner instance share one Pub/Sub connection. The backend opens that connection with the first waiting call. The backend subscribes to the channel of a resource while a call waits for that resource. Subscription setup and cleanup run independently of each caller's wait.
+
+Stopping the plugin cancels waiting calls and closes its Redis client. If the stop context expires, the stop call returns a context error and cleanup continues in the background. Stored locks remain available to other RoadRunner instances until release or expiry.
+
+## Wait semantics
+
+The `wait` field is one RPC field, but the six methods do not use it in the same way. The two backends also apply it differently.
+
+`Lock` and `LockRead` use `wait` as the maximum time to wait for the resource. Contention until the wait expires returns `Ok: false`. On Redis a command failure, or a deadline that occurs during a Redis command, returns an RPC error. The lock state is then unknown. Call `Exists` or `Release` to find the state of the lock. A positive wait that is shorter than the Redis round trips of the acquisition returns an RPC error on Redis for this reason, and `Ok: false` on memory.
+
+On Redis, `Release`, `ForceRelease`, `Exists`, and `UpdateTTL` do not wait for the resource. Each of these methods sends one Lua script call, and `wait` is the deadline for that call. If the deadline occurs, the result of the call is unknown, and the method returns an RPC error. `Ok: false` is not correct in this condition, because it reports a definite result, but Redis can apply the command after the deadline.
+
+On the memory backend, `Release`, `ForceRelease`, `Exists`, and `UpdateTTL` use `wait` only as the time limit to get an internal mutex. For valid RPC requests, they return `Ok: false` when this limit expires, and they never return an error.
+
+A `wait` of `0` on the Redis backend makes one acquisition attempt and sets no deadline on the Redis call. The go-redis client then applies its `read_timeout`, which is 5 seconds by default. This lets one Redis call complete on a slow network.
+
+A `wait` of `0` on the memory backend sets a time limit of 1 millisecond. A `Lock` call can thus get a resource that another caller releases in that time.
+
+## Logging
+
+The plugin writes one `lock backend initialized` message at the info level when it selects a backend. The message reports the driver. The Redis driver also reports the configured addresses and the database.
+
+The Redis backend reports a failed lock script at the error level. The message reports the operation, the Redis key, and the lock ID. An expired wait bound is not a failure and is not reported.
+
+The Redis backend reports a failed Pub/Sub subscribe at the error level. The message reports the channel.
+
+The Redis backend reports a Pub/Sub subscription that is established again after a reconnect at the warning level. The message reports the channel.
+
+## Tests
+
+Start a test Redis instance:
+
+```sh
+docker run --rm -d --name rr-lock-redis -p 127.0.0.1:16379:6379 redis:7-alpine redis-server --save "" --appendonly no
+```
+
+Run both Go modules from the repository root:
+
+```sh
+go test -race -timeout 20m ./... ./tests/...
+```
+
+Set `RR_LOCK_REDIS_ADDR` to use another test Redis address. Redis tests require a dedicated server because the connection tests pause commands and disconnect Pub/Sub clients.
+
+Stop the test server after the tests:
+
+```sh
+docker stop rr-lock-redis
+```

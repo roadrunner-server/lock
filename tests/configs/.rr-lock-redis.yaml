@@ -1,0 +1,10 @@
+version: '3'
+
+logs:
+  level: error
+
+lock:
+  driver: redis
+  config:
+    addrs:
+      - "${RR_LOCK_REDIS_ADDR:-127.0.0.1:16379}"
