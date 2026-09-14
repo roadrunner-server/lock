@@ -16,3 +16,7 @@ vendor/
 **/vendor/
 .DS_Store
 .claude/settings.local.json
+
+# Implementation plans
+PLAN.md
+plans/
