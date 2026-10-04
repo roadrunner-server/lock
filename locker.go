@@ -1,6 +1,7 @@
 package lock
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"sync"
@@ -737,10 +738,7 @@ func (l *locker) makeLockCallback(r *resource, res, id string, ttl int) callback
 
 	return func(notifCh chan<- struct{}, sCh <-chan struct{}) {
 		// case for the items without TTL. We should add such items to control their flow
-		cbttl := ttl
-		if cbttl == 0 {
-			cbttl = 31555952000000 // year
-		}
+		cbttl := cmp.Or(ttl, 31555952000000) // year
 
 		// TTL channel
 		ta := time.NewTicker(time.Microsecond * time.Duration(cbttl))
@@ -771,9 +769,7 @@ func (l *locker) makeLockCallback(r *resource, res, id string, ttl int) callback
 				ta.Stop()
 			case newTTL := <-updateTTLCh:
 				// if the new TTL is 0, we should treat it as unlimited
-				if newTTL == 0 {
-					newTTL = 31555952000000 // year
-				}
+				newTTL = cmp.Or(newTTL, 31555952000000) // year
 				l.log.Debug("r/lock: ttl was updated",
 					"resource", res,
 					"id", id,
