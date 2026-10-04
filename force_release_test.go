@@ -17,8 +17,12 @@ func TestForceReleaseRegisteredLockWithZeroCounters(t *testing.T) {
 	l.resources[name] = r
 
 	// Writer cleanup can clear the counters after a new reader registers.
-	cleanup, stopCh, updateTTLCh := l.makeLockCallback(name, "reader", 0)
-	r.locks.Store("reader", &item{stopCh: stopCh, updateTTLCh: updateTTLCh})
+	cleanup := l.makeLockCallback(r, name, "reader", 0)
+	registered, ok := r.locks.Load("reader")
+	if !ok {
+		t.Fatal("the lock must be registered before its callback runs")
+	}
+	stopCh := registered.(*item).stopCh
 
 	if !l.forceRelease(t.Context(), name) {
 		t.Fatal("force release must remove a registered live lock with zero counters")
