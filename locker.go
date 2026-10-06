@@ -1,6 +1,7 @@
 package lock
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"sync"
@@ -102,17 +103,8 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 
 		l.resources[res] = rr
 
-		callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl)
-
-		rr.locks.Store(id, &item{
-			stopCh:      stopCbCh,
-			updateTTLCh: updateTTLCh,
-		})
-
-		// run the callback
-		go func() {
-			callb(rr.notificationCh, rr.stopCh)
-		}()
+		callb := l.makeLockCallback(rr, res, id, ttl)
+		go callb(rr.notificationCh, rr.stopCh)
 
 		l.globalMu.unlock()
 		return true
@@ -177,16 +169,8 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			r.writerCount.Store(1)
 			r.readerCount.Store(0)
 
-			callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl)
-
-			r.locks.Store(id, &item{
-				stopCh:      stopCbCh,
-				updateTTLCh: updateTTLCh,
-			})
-			// run the callback
-			go func() {
-				callb(r.notificationCh, r.stopCh)
-			}()
+			callb := l.makeLockCallback(r, res, id, ttl)
+			go callb(r.notificationCh, r.stopCh)
 
 			r.resourceMu.unlock()
 
@@ -276,18 +260,8 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 				r.writerCount.Store(1)
 				r.readerCount.Store(0)
 
-				// callback
-				callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl)
-
-				r.locks.Store(id, &item{
-					stopCh:      stopCbCh,
-					updateTTLCh: updateTTLCh,
-				})
-
-				// run the callback
-				go func() {
-					callb(r.notificationCh, r.stopCh)
-				}()
+				callb := l.makeLockCallback(r, res, id, ttl)
+				go callb(r.notificationCh, r.stopCh)
 
 				r.resourceMu.unlock()
 				return true
@@ -313,18 +287,8 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 			r.writerCount.Store(1)
 			r.readerCount.Store(0)
 
-			// callback
-			callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl)
-
-			r.locks.Store(id, &item{
-				stopCh:      stopCbCh,
-				updateTTLCh: updateTTLCh,
-			})
-
-			// run the callback
-			go func() {
-				callb(r.notificationCh, r.stopCh)
-			}()
+			callb := l.makeLockCallback(r, res, id, ttl)
+			go callb(r.notificationCh, r.stopCh)
 
 			r.resourceMu.unlock()
 			return true
@@ -354,17 +318,8 @@ func (l *locker) lock(ctx context.Context, res, id string, ttl int) bool {
 		r.writerCount.Store(1)
 		r.readerCount.Store(0)
 
-		callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl)
-
-		r.locks.Store(id, &item{
-			stopCh:      stopCbCh,
-			updateTTLCh: updateTTLCh,
-		})
-
-		// run the callback
-		go func() {
-			callb(r.notificationCh, r.stopCh)
-		}()
+		callb := l.makeLockCallback(r, res, id, ttl)
+		go callb(r.notificationCh, r.stopCh)
 
 		r.resourceMu.unlock()
 		return true
@@ -413,17 +368,8 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 
 		l.resources[res] = rr
 
-		callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl)
-
-		rr.locks.Store(id, &item{
-			stopCh:      stopCbCh,
-			updateTTLCh: updateTTLCh,
-		})
-
-		// run the callback
-		go func() {
-			callb(rr.notificationCh, rr.stopCh)
-		}()
+		callb := l.makeLockCallback(rr, res, id, ttl)
+		go callb(rr.notificationCh, rr.stopCh)
 
 		l.globalMu.unlock()
 		return true
@@ -495,17 +441,8 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 			r.writerCount.Store(0)
 			r.readerCount.Add(1)
 
-			callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl)
-
-			r.locks.Store(id, &item{
-				stopCh:      stopCbCh,
-				updateTTLCh: updateTTLCh,
-			})
-
-			// run the callback
-			go func() {
-				callb(r.notificationCh, r.stopCh)
-			}()
+			callb := l.makeLockCallback(r, res, id, ttl)
+			go callb(r.notificationCh, r.stopCh)
 
 			r.resourceMu.unlock()
 			return true
@@ -536,18 +473,8 @@ func (l *locker) lockRead(ctx context.Context, res, id string, ttl int) bool {
 		// increase readers
 		r.readerCount.Add(1)
 
-		// we have TTL, create callback
-		callb, stopCbCh, updateTTLCh := l.makeLockCallback(res, id, ttl)
-
-		r.locks.Store(id, &item{
-			stopCh:      stopCbCh,
-			updateTTLCh: updateTTLCh,
-		})
-
-		// run the callback
-		go func() {
-			callb(r.notificationCh, r.stopCh)
-		}()
+		callb := l.makeLockCallback(r, res, id, ttl)
+		go callb(r.notificationCh, r.stopCh)
 
 		r.resourceMu.unlock()
 		return true
@@ -800,17 +727,18 @@ func (l *locker) stop(ctx context.Context) {
 	l.log.Debug("signal sent to all resources")
 }
 
-func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struct{}, chan int) {
+// makeLockCallback registers the lock before its cleanup callback runs.
+func (l *locker) makeLockCallback(r *resource, res, id string, ttl int) callback {
 	stopCbCh := make(chan struct{}, 1)
 	updateTTLCh := make(chan int, 1)
+	r.locks.Store(id, &item{
+		stopCh:      stopCbCh,
+		updateTTLCh: updateTTLCh,
+	})
 
-	// at this point, when adding lock, we should not have the callback
 	return func(notifCh chan<- struct{}, sCh <-chan struct{}) {
 		// case for the items without TTL. We should add such items to control their flow
-		cbttl := ttl
-		if cbttl == 0 {
-			cbttl = 31555952000000 // year
-		}
+		cbttl := cmp.Or(ttl, 31555952000000) // year
 
 		// TTL channel
 		ta := time.NewTicker(time.Microsecond * time.Duration(cbttl))
@@ -841,9 +769,7 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 				ta.Stop()
 			case newTTL := <-updateTTLCh:
 				// if the new TTL is 0, we should treat it as unlimited
-				if newTTL == 0 {
-					newTTL = 31555952000000 // year
-				}
+				newTTL = cmp.Or(newTTL, 31555952000000) // year
 				l.log.Debug("r/lock: ttl was updated",
 					"resource", res,
 					"id", id,
@@ -914,5 +840,5 @@ func (l *locker) makeLockCallback(res, id string, ttl int) (callback, chan struc
 				break
 			}
 		}
-	}, stopCbCh, updateTTLCh
+	}
 }
