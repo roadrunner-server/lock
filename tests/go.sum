@@ -17,6 +17,7 @@ github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX
 github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
 github.com/klauspost/cpuid/v2 v2.4.0 h1:S6Hrbc7+ywsr0r+RLapfGBHfyefhCTwEh3A0tV913Dw=
+github.com/klauspost/cpuid/v2 v2.4.0/go.mod h1:19jmZ9mjzoF//ddRSUsv0zfBTJWh3QJh9FNxZTMrGxU=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
 github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
 github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
@@ -33,8 +34,8 @@ github.com/roadrunner-server/api-go/v6 v6.0.0-beta.15 h1:GhhGo7ZPICegw/3GQGZW9Tv
 github.com/roadrunner-server/api-go/v6 v6.0.0-beta.15/go.mod h1:36v1hw+B0drdJbKbgfXMtJmvKqo9CdhDidl3MKd7T1Q=
 github.com/roadrunner-server/config/v6 v6.0.0-beta.4 h1:C7cNPb441g7Uwo4nN0Ug7RZrwiFfx+UU7brFxVLBU50=
 github.com/roadrunner-server/config/v6 v6.0.0-beta.4/go.mod h1:MyM08rnnUBqmozeJ1SqFO0l2iu5nQTPKod4OLajarow=
-github.com/roadrunner-server/endure/v2 v2.6.2 h1:sIB4kTyE7gtT3fDhuYWUYn6Vt/dcPtiA6FoNS1eS+84=
-github.com/roadrunner-server/endure/v2 v2.6.2/go.mod h1:t/2+xpNYgGBwhzn83y2MDhvhZ19UVq1REcvqn7j7RB8=
+github.com/roadrunner-server/endure/v2 v2.7.0 h1:HgWUXI3D3mGv8SJFA1mE9uEGdVmVVKGsexgsIkArd/c=
+github.com/roadrunner-server/endure/v2 v2.7.0/go.mod h1:6+QFmFt9MsBsInkrahKlIp/SDh7GYXEVQGFVnfo1efA=
 github.com/roadrunner-server/errors v1.5.0 h1:unG7LKIZrSzkCCF3YLRLA5VyqE0KKomofXVJUXJe00g=
 github.com/roadrunner-server/errors v1.5.0/go.mod h1:g9fo/T2C13cWRDR9PW1r0ZAOSQfNhWAZawyfkGiaHuI=
 github.com/roadrunner-server/goridge/v4 v4.0.0-beta.3 h1:+kUw00/fpqwdMWrPMYW+OZH3O4gEar8hqrY7I+nAztA=
