@@ -12,7 +12,7 @@ require (
 	github.com/roadrunner-server/goridge/v4 v4.0.0-beta.3
 	github.com/roadrunner-server/lock/v6 v6.0.0
 	github.com/roadrunner-server/logger/v6 v6.0.0-beta.4
-	github.com/roadrunner-server/rpc/v6 v6.0.0-beta.6
+	github.com/roadrunner-server/rpc/v6 v6.0.0
 	github.com/stretchr/testify v1.12.1
 )
 
